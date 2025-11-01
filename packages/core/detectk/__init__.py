@@ -46,6 +46,12 @@ from detectk.registry import (
     StorageRegistry,
 )
 
+# Configuration
+from detectk.config import ConfigLoader, MetricConfig
+
+# Main orchestrator
+from detectk.check import MetricCheck
+
 __all__ = [
     # Version
     "__version__",
@@ -72,4 +78,9 @@ __all__ = [
     "DetectorRegistry",
     "AlerterRegistry",
     "StorageRegistry",
+    # Configuration
+    "ConfigLoader",
+    "MetricConfig",
+    # Main orchestrator
+    "MetricCheck",
 ]
