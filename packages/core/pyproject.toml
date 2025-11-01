@@ -41,6 +41,7 @@ dependencies = [
     "pyyaml>=6.0",
     "jinja2>=3.1.0",
     "python-dateutil>=2.8.0",
+    "click>=8.1.0",
 ]
 
 [project.optional-dependencies]
@@ -60,6 +61,9 @@ Homepage = "https://github.com/alexeiveselov92/detectk"
 Documentation = "https://github.com/alexeiveselov92/detectk#readme"
 Repository = "https://github.com/alexeiveselov92/detectk"
 Issues = "https://github.com/alexeiveselov92/detectk/issues"
+
+[project.scripts]
+dtk = "detectk.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
