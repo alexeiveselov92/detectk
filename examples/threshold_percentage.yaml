@@ -1,0 +1,38 @@
+# Percentage-based threshold detection
+# Alert when sessions increase by more than 20% from baseline
+
+name: "sessions_threshold_percentage"
+description: "Detect significant percentage changes in sessions"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        count() as value,
+        now() as timestamp
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "threshold"
+  params:
+    threshold: 20.0  # 20% increase
+    operator: "greater_than"
+    percent: true
+    baseline: 1000  # Expected baseline value
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "default"

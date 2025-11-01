@@ -1,0 +1,37 @@
+# Range-based threshold detection
+# Alert when sessions fall OUTSIDE expected range [900, 1100]
+
+name: "sessions_threshold_range"
+description: "Alert when sessions are outside normal range"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        count() as value,
+        now() as timestamp
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "threshold"
+  params:
+    threshold: 900         # Lower bound
+    upper_threshold: 1100  # Upper bound
+    operator: "outside"    # Anomaly if < 900 OR > 1100
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "default"

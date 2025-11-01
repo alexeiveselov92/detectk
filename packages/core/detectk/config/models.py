@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 DETECTOR_DEFAULTS: dict[str, dict[str, Any]] = {
     "threshold": {
         "operator": "greater_than",
+        "percent": False,
+        "tolerance": 0.001,
     },
     "mad": {
         "n_sigma": 3.0,

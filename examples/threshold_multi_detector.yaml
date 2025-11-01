@@ -1,0 +1,86 @@
+# Multiple threshold detectors for A/B testing
+# Compare different threshold strategies on the same metric
+
+name: "sessions_multi_threshold"
+description: "Compare multiple threshold detection strategies"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        count() as value,
+        now() as timestamp
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+# Multiple detectors for comparison
+detectors:
+  # Conservative: only alert on extreme values
+  - id: "threshold_high"
+    type: "threshold"
+    params:
+      threshold: 1500
+      operator: "greater_than"
+
+  # Moderate: catch significant anomalies
+  - id: "threshold_medium"
+    type: "threshold"
+    params:
+      threshold: 1200
+      operator: "greater_than"
+
+  # Aggressive: catch all anomalies
+  - id: "threshold_low"
+    type: "threshold"
+    params:
+      threshold: 1000
+      operator: "greater_than"
+
+  # Percentage-based detector
+  - id: "percent_20"
+    type: "threshold"
+    params:
+      threshold: 20.0  # 20% increase
+      operator: "greater_than"
+      percent: true
+      baseline: 1000
+
+  # Range detector
+  - id: "range_900_1100"
+    type: "threshold"
+    params:
+      threshold: 900
+      upper_threshold: 1100
+      operator: "outside"
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "default"
+    save_detections: true  # Save all detector results for comparison
+
+# Query to compare detector performance:
+#
+# SELECT
+#     detector_id,
+#     detector_type,
+#     detector_params,
+#     COUNT(*) as total_checks,
+#     SUM(is_anomaly) as anomalies_detected,
+#     AVG(anomaly_score) as avg_score
+# FROM dtk_detections
+# WHERE metric_name = 'sessions_multi_threshold'
+#   AND detected_at >= now() - INTERVAL 7 DAY
+# GROUP BY detector_id, detector_type, detector_params
+# ORDER BY anomalies_detected DESC;
