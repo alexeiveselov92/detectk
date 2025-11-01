@@ -1,0 +1,76 @@
+# Conditional Template Example
+#
+# Different message format based on detector type or severity
+#
+# This example shows:
+# - Conditional logic in templates (if/else)
+# - Accessing metadata fields
+# - Severity-based formatting
+
+name: "revenue_conditional"
+description: "Different alert format based on severity"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT sum(amount) as value
+      FROM transactions
+      WHERE timestamp >= now() - INTERVAL 1 HOUR
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 120
+
+    # Conditional template based on severity
+    message_template: |
+      {% if score and score >= 5.0 %}
+      🔴 **CRITICAL ANOMALY** `{{ metric_name }}`
+      @channel - Immediate attention required!
+      {% elif score and score >= 4.0 %}
+      🟠 **HIGH ANOMALY** `{{ metric_name }}`
+      {% elif score and score >= 3.0 %}
+      🟡 **MODERATE ANOMALY** `{{ metric_name }}`
+      {% else %}
+      ⚠️ **ANOMALY** `{{ metric_name }}`
+      {% endif %}
+
+      **Value:** ${{ value | round(2) }}
+      {% if lower_bound and upper_bound %}
+      **Expected:** ${{ lower_bound | round(2) }} - ${{ upper_bound | round(2) }}
+      {% endif %}
+      {% if score %}
+      **Severity:** {{ score | round(1) }} sigma
+      {% endif %}
+
+      **Time:** {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+
+      {% if metadata.detector == 'threshold' %}
+      Detection method: Simple threshold check
+      {% elif metadata.detector == 'mad' %}
+      Detection method: Statistical (MAD)
+      Window: {{ metadata.window_size }}
+      {% elif metadata.detector == 'zscore' %}
+      Detection method: Statistical (Z-Score)
+      Window: {{ metadata.window_size }}
+      {% endif %}
+
+      [View Dashboard](https://grafana.example.com/d/revenue?from={{ (timestamp.timestamp() * 1000 - 3600000) | int }}&to={{ (timestamp.timestamp() * 1000) | int }})
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"

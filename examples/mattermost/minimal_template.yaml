@@ -1,0 +1,40 @@
+# Minimal Alert Template Example
+#
+# For high-frequency metrics where you want brief notifications
+
+name: "api_latency_minimal"
+description: "Minimal alert format for frequent checks"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT avg(response_time_ms) as value
+      FROM api_requests
+      WHERE timestamp >= now() - INTERVAL 1 MINUTE
+
+detector:
+  type: "mad"
+  params:
+    window_size: "7 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 15  # Shorter cooldown for latency alerts
+
+    # Minimal one-line format
+    message_template: |
+      ⚠️ **{{ metric_name }}**: {{ value | round(1) }}ms (expected: {{ lower_bound | round(0) }}-{{ upper_bound | round(0) }}ms, {{ direction }}) - {{ timestamp.strftime('%H:%M:%S') }}
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"

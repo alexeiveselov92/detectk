@@ -44,6 +44,7 @@ class MattermostAlerter(BaseAlerter):
         icon_url: Bot icon URL (optional)
         channel: Channel override (optional, uses webhook default)
         timeout: Request timeout in seconds (default: 10)
+        message_template: Custom Jinja2 template for message formatting (optional)
 
     Example configuration:
         alerter:
@@ -53,7 +54,23 @@ class MattermostAlerter(BaseAlerter):
             cooldown_minutes: 60  # Don't spam - wait 1 hour between alerts
             username: "DetectK Bot"
 
-    Message format:
+    Example with custom message template (Jinja2):
+        alerter:
+          type: "mattermost"
+          params:
+            webhook_url: "${MATTERMOST_WEBHOOK}"
+            cooldown_minutes: 60
+            message_template: |
+              🚨 **ANOMALY** `{{ metric_name }}`
+
+              Value: {{ value | round(2) }}
+              {% if lower_bound and upper_bound %}
+              Expected: [{{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}]
+              {% endif %}
+
+              {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+
+    Default message format (if no custom template):
         🚨 **ANOMALY DETECTED** `metric_name`
 
         📊 **Value:** 1,234.5 (↗ up)
@@ -86,6 +103,20 @@ class MattermostAlerter(BaseAlerter):
         self.icon_url = config.get("icon_url")
         self.channel = config.get("channel")
         self.timeout = config.get("timeout", 10)
+
+        # Custom message template (Jinja2)
+        self.message_template = config.get("message_template")
+        self._template = None
+        if self.message_template:
+            from jinja2 import Template, TemplateSyntaxError
+
+            try:
+                self._template = Template(self.message_template)
+            except TemplateSyntaxError as e:
+                raise ConfigurationError(
+                    f"Invalid Jinja2 template in message_template: {e}",
+                    config_path="alerter.params.message_template",
+                ) from e
 
         # Cooldown tracking (in-memory for now, Phase 3: move to storage)
         self._last_alert_time: dict[str, datetime] = {}
@@ -199,6 +230,40 @@ class MattermostAlerter(BaseAlerter):
 
     def _format_message(self, detection: DetectionResult) -> str:
         """Format detection result as Mattermost message.
+
+        Uses custom template if provided, otherwise uses default format.
+
+        Args:
+            detection: Detection result
+
+        Returns:
+            Formatted message with Markdown
+        """
+        # If custom template provided, use it
+        if self._template:
+            try:
+                return self._template.render(
+                    metric_name=detection.metric_name,
+                    timestamp=detection.timestamp,
+                    value=detection.value,
+                    is_anomaly=detection.is_anomaly,
+                    score=detection.score,
+                    lower_bound=detection.lower_bound,
+                    upper_bound=detection.upper_bound,
+                    direction=detection.direction,
+                    percent_deviation=detection.percent_deviation,
+                    metadata=detection.metadata or {},
+                )
+            except Exception as e:
+                # If template rendering fails, log error and use default format
+                logger.error(f"Failed to render custom template: {e}. Using default format.")
+                # Fall through to default format
+
+        # Default format
+        return self._format_default_message(detection)
+
+    def _format_default_message(self, detection: DetectionResult) -> str:
+        """Format detection result using default template.
 
         Args:
             detection: Detection result

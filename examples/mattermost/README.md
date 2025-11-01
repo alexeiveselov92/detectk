@@ -106,7 +106,68 @@ ORDER BY anomalies_detected DESC;
 
 ---
 
+### 4. Custom Message Template (`custom_template.yaml`) ✨ NEW
+
+Customize alert messages using Jinja2 templates:
+- Different language (Russian example)
+- Include dashboard links
+- Custom formatting
+- Access all detection data
+
+**Run:**
+```bash
+dtk run examples/mattermost/custom_template.yaml
+```
+
+**Template example:**
+```yaml
+alerter:
+  params:
+    message_template: |
+      🚨 **АНОМАЛИЯ** `{{ metric_name }}`
+
+      Значение: {{ value | round(2) }}
+      Ожидалось: [{{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}]
+
+      {{ timestamp.strftime('%d.%m.%Y %H:%M:%S') }}
+
+      [Открыть дашборд](https://grafana.example.com/d/sessions)
+```
+
+---
+
+### 5. Minimal Template (`minimal_template.yaml`) ✨ NEW
+
+Brief one-line alerts for high-frequency metrics:
+- Compact format
+- Essential info only
+- Good for frequent checks (latency, API metrics)
+
+**Example output:**
+```
+⚠️ **api_latency_minimal**: 150.5ms (expected: 80-120ms, up) - 14:30:45
+```
+
+---
+
+### 6. Conditional Template (`conditional_template.yaml`) ✨ NEW
+
+Different format based on severity or detector type:
+- Severity-based icons (🔴 critical, 🟠 high, 🟡 moderate)
+- Conditional @channel mentions
+- Different format for different detectors
+- Dynamic dashboard links
+
+**Run:**
+```bash
+dtk run examples/mattermost/conditional_template.yaml
+```
+
+---
+
 ## Alert Message Format
+
+### Default Format (No Custom Template)
 
 Mattermost alerts include:
 - Metric name and timestamp
@@ -172,6 +233,116 @@ Cooldown prevents alert spam:
 4. **Test with backtesting** before production (see backtesting examples)
 5. **Monitor detector performance** with multi-detector approach
 6. **Adjust gradually** - tune one parameter at a time
+
+---
+
+## Custom Message Templates ✨ NEW
+
+### Why Customize?
+
+- **Different language** (Russian, German, Spanish, etc.)
+- **Team preferences** (minimal vs detailed)
+- **Dashboard links** (Grafana, Kibana, custom tools)
+- **Severity-based formatting** (critical, high, moderate)
+- **Context-specific info** (on-call mentions, runbooks)
+
+### Available Template Variables
+
+All DetectionResult fields accessible in template:
+
+| Variable | Type | Description | Example |
+|----------|------|-------------|---------|
+| `metric_name` | string | Metric name | `"sessions_hourly"` |
+| `timestamp` | datetime | Detection time | `datetime(2024, 11, 2, 14, 30)` |
+| `value` | float | Current value | `1500.0` |
+| `is_anomaly` | bool | Anomaly status | `True` |
+| `score` | float \| None | Anomaly score (sigma) | `4.2` |
+| `lower_bound` | float \| None | Expected min | `900.0` |
+| `upper_bound` | float \| None | Expected max | `1100.0` |
+| `direction` | str \| None | Direction | `"up"` / `"down"` / `None` |
+| `percent_deviation` | float \| None | % deviation | `36.4` |
+| `metadata` | dict | Detector info & custom | `{"detector": "mad", ...}` |
+
+### Jinja2 Filters
+
+Use built-in Jinja2 filters:
+
+```yaml
+{{ value | round(2) }}                    # Round to 2 decimals: 1234.56
+{{ timestamp.strftime('%d.%m.%Y') }}      # Format date: 02.11.2024
+{{ percent_deviation | abs | round(1) }}  # Absolute, rounded: 36.4
+```
+
+### Template Examples
+
+**Russian language:**
+```yaml
+message_template: |
+  🚨 **АНОМАЛИЯ** `{{ metric_name }}`
+  Значение: {{ value | round(2) }}
+  Ожидалось: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
+  {{ timestamp.strftime('%d.%m.%Y %H:%M') }}
+```
+
+**Minimal one-liner:**
+```yaml
+message_template: |
+  ⚠️ {{ metric_name }}: {{ value | round(1) }} ({{ direction }}) - {{ timestamp.strftime('%H:%M') }}
+```
+
+**With dashboard links:**
+```yaml
+message_template: |
+  🚨 **ANOMALY** `{{ metric_name }}`
+
+  Value: {{ value | round(2) }}
+  Expected: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
+
+  [Grafana](https://grafana.example.com/d/{{ metric_name }})
+  [Logs](https://kibana.example.com/?q={{ metric_name }})
+```
+
+**Severity-based:**
+```yaml
+message_template: |
+  {% if score >= 5.0 %}
+  🔴 **CRITICAL** `{{ metric_name }}` @channel
+  {% elif score >= 4.0 %}
+  🟠 **HIGH** `{{ metric_name }}`
+  {% else %}
+  🟡 **MODERATE** `{{ metric_name }}`
+  {% endif %}
+
+  {{ value | round(2) }} ({{ score | round(1) }} sigma)
+```
+
+**Conditional detector info:**
+```yaml
+message_template: |
+  🚨 **ANOMALY** `{{ metric_name }}`
+
+  Value: {{ value | round(2) }}
+
+  {% if metadata.detector == 'threshold' %}
+  Threshold: {{ metadata.threshold }}
+  {% elif metadata.detector == 'mad' %}
+  Window: {{ metadata.window_size }}, n_sigma: {{ metadata.n_sigma }}
+  {% endif %}
+```
+
+### Testing Templates
+
+1. Create config with custom template
+2. Validate: `dtk validate my_config.yaml`
+3. If validation passes, template syntax is correct
+4. Test with real data: `dtk run my_config.yaml`
+
+### Template Errors
+
+If template has errors:
+- Validation will fail with error message
+- Runtime errors fall back to default format
+- Check logs for template rendering errors
 
 ---
 

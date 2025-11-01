@@ -1,0 +1,71 @@
+# Custom Message Template Example
+#
+# This example shows how to customize alert messages using Jinja2 templates
+#
+# Use cases:
+# - Different language (Russian, German, etc.)
+# - Minimal format for frequent alerts
+# - Include dashboard/log links
+# - Different format for different detectors
+
+name: "sessions_custom_alert"
+description: "Example with custom Russian alert template"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT count() as value
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+    # Custom message template (Jinja2)
+    message_template: |
+      🚨 **АНОМАЛИЯ ОБНАРУЖЕНА** `{{ metric_name }}`
+
+      📊 **Текущее значение:** {{ value | round(2) }}
+      {% if direction %}
+      📈 **Направление:** {{ direction }}
+      {% endif %}
+      {% if lower_bound and upper_bound %}
+      📉 **Ожидаемый диапазон:** [{{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}]
+      {% endif %}
+      {% if score %}
+      ⚠️ **Оценка аномалии:** {{ score | round(2) }} сигм
+      {% endif %}
+      {% if percent_deviation %}
+      📏 **Отклонение:** {{ percent_deviation | round(1) }}%
+      {% endif %}
+
+      🕒 **Время:** {{ timestamp.strftime('%d.%m.%Y %H:%M:%S') }}
+
+      {% if metadata.detector %}
+      🔍 **Детектор:** {{ metadata.detector }}
+      {% if metadata.window_size %}(окно: {{ metadata.window_size }}){% endif %}
+      {% if metadata.n_sigma %}(порог: {{ metadata.n_sigma }} сигм){% endif %}
+      {% endif %}
+
+      [📊 Открыть дашборд](https://grafana.example.com/d/sessions)
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"
