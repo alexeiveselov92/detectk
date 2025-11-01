@@ -28,9 +28,9 @@ alerter:
     webhook_url: "${MATTERMOST_WEBHOOK}"
     cooldown_minutes: 15  # Shorter cooldown for latency alerts
 
-    # Minimal one-line format
+    # Minimal one-line format (no emojis)
     message_template: |
-      ⚠️ **{{ metric_name }}**: {{ value | round(1) }}ms (expected: {{ lower_bound | round(0) }}-{{ upper_bound | round(0) }}ms, {{ direction }}) - {{ timestamp.strftime('%H:%M:%S') }}
+      **{{ metric_name }}**: {{ value | round(1) }}ms (expected: {{ lower_bound | round(0) }}-{{ upper_bound | round(0) }}ms, {{ direction }}) @ {{ timestamp.strftime('%H:%M:%S') }}
 
 storage:
   enabled: true

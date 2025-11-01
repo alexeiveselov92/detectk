@@ -61,25 +61,27 @@ class MattermostAlerter(BaseAlerter):
             webhook_url: "${MATTERMOST_WEBHOOK}"
             cooldown_minutes: 60
             message_template: |
-              🚨 **ANOMALY** `{{ metric_name }}`
-
+              **ANOMALY** `{{ metric_name }}`
               Value: {{ value | round(2) }}
               {% if lower_bound and upper_bound %}
-              Expected: [{{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}]
+              Expected: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
               {% endif %}
+              Time: {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
 
-              {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+    Default message format (if no custom template - simple and universal):
+        **ANOMALY DETECTED: metric_name**
 
-    Default message format (if no custom template):
-        🚨 **ANOMALY DETECTED** `metric_name`
+        Value: 1234.50
+        Expected range: 900.00 - 1100.00
+        Anomaly score: 4.20 sigma
+        Direction: up
+        Deviation: +15.0%
 
-        📊 **Value:** 1,234.5 (↗ up)
-        📈 **Expected:** [900.0 - 1,100.0]
-        📉 **Score:** 4.2 sigma
-        ⚠️ **Deviation:** +15.0%
+        Time: 2024-11-02 14:30:00
+        Detector: type=mad, window=30 days, threshold=3.0 sigma
 
-        🕒 2024-11-01 23:50:00
-        🔍 Detector: mad (window: 30 days, n_sigma: 3.0)
+    Note: Default format has NO emojis - works everywhere (email, SMS, logs, accessibility).
+          For fancy formatting with emojis, use custom templates (see examples/).
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -263,71 +265,64 @@ class MattermostAlerter(BaseAlerter):
         return self._format_default_message(detection)
 
     def _format_default_message(self, detection: DetectionResult) -> str:
-        """Format detection result using default template.
+        """Format detection result using simple default format.
+
+        Philosophy: Plain, professional, no emojis. Just facts.
+        Works everywhere: Mattermost, Slack, email, logs, SMS.
+        Accessible to screen readers.
 
         Args:
             detection: Detection result
 
         Returns:
-            Formatted message with Markdown
+            Formatted message (plain text with minimal Markdown)
         """
-        # Direction emoji
-        direction_emoji = {
-            "up": "↗",
-            "down": "↘",
-            None: "→",
-        }.get(detection.direction, "→")
+        # Start with clear header
+        lines = [f"**ANOMALY DETECTED: {detection.metric_name}**", ""]
 
-        # Build message lines
-        lines = [
-            f"🚨 **ANOMALY DETECTED** `{detection.metric_name}`",
-            "",
-        ]
-
-        # Value and direction
-        direction_text = detection.direction or "unknown"
-        lines.append(
-            f"📊 **Value:** {detection.value:,.2f} ({direction_emoji} {direction_text})"
-        )
+        # Core metric data
+        lines.append(f"Value: {detection.value:.2f}")
 
         # Expected bounds (if available)
         if detection.lower_bound is not None and detection.upper_bound is not None:
             lines.append(
-                f"📈 **Expected:** [{detection.lower_bound:,.2f} - {detection.upper_bound:,.2f}]"
+                f"Expected range: {detection.lower_bound:.2f} - {detection.upper_bound:.2f}"
             )
 
-        # Anomaly score
+        # Anomaly score (statistical significance)
         if detection.score is not None:
             if detection.score == float("inf"):
-                lines.append("📉 **Score:** ∞ (extreme outlier)")
+                lines.append("Anomaly score: infinite (extreme outlier)")
             else:
-                lines.append(f"📉 **Score:** {detection.score:.2f} sigma")
+                lines.append(f"Anomaly score: {detection.score:.2f} sigma")
 
-        # Percent deviation
+        # Direction (if available)
+        if detection.direction:
+            lines.append(f"Direction: {detection.direction}")
+
+        # Percent deviation (if available)
         if detection.percent_deviation is not None:
-            lines.append(f"⚠️ **Deviation:** {detection.percent_deviation:+.1f}%")
+            lines.append(f"Deviation: {detection.percent_deviation:+.1f}%")
 
         # Timestamp
         lines.append("")
-        lines.append(
-            f"🕒 {detection.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        lines.append(f"Time: {detection.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # Detector info from metadata
+        # Detector metadata (for debugging/audit)
         if detection.metadata:
             detector_parts = []
 
             if "detector" in detection.metadata:
-                detector_parts.append(detection.metadata["detector"])
+                detector_parts.append(f"type={detection.metadata['detector']}")
 
             if "window_size" in detection.metadata:
-                detector_parts.append(f"window: {detection.metadata['window_size']}")
+                detector_parts.append(f"window={detection.metadata['window_size']}")
 
             if "n_sigma" in detection.metadata:
-                detector_parts.append(f"n_sigma: {detection.metadata['n_sigma']}")
+                detector_parts.append(f"threshold={detection.metadata['n_sigma']} sigma")
 
             if detector_parts:
-                lines.append(f"🔍 **Detector:** {', '.join(detector_parts)}")
+                lines.append(f"Detector: {', '.join(detector_parts)}")
 
         return "\n".join(lines)
 

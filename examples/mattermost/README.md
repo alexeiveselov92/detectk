@@ -106,7 +106,7 @@ ORDER BY anomalies_detected DESC;
 
 ---
 
-### 4. Custom Message Template (`custom_template.yaml`) ✨ NEW
+### 4. Custom Message Template (`custom_template.yaml`)
 
 Customize alert messages using Jinja2 templates:
 - Different language (Russian example)
@@ -124,19 +124,45 @@ dtk run examples/mattermost/custom_template.yaml
 alerter:
   params:
     message_template: |
-      🚨 **АНОМАЛИЯ** `{{ metric_name }}`
+      **АНОМАЛИЯ ОБНАРУЖЕНА: {{ metric_name }}**
 
-      Значение: {{ value | round(2) }}
-      Ожидалось: [{{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}]
+      Текущее значение: {{ value | round(2) }}
+      Ожидаемый диапазон: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
 
-      {{ timestamp.strftime('%d.%m.%Y %H:%M:%S') }}
+      Время: {{ timestamp.strftime('%d.%m.%Y %H:%M:%S') }}
 
       [Открыть дашборд](https://grafana.example.com/d/sessions)
 ```
 
 ---
 
-### 5. Minimal Template (`minimal_template.yaml`) ✨ NEW
+### 5. Rich Format Template (`rich_format.yaml`)
+
+Visually rich alerts with emojis and icons:
+- Eye-catching format with emojis
+- Visual hierarchy
+- Good for Mattermost/Slack
+- **Note:** Not accessible, doesn't work in plain text
+
+**Example output:**
+```
+🚨 **ANOMALY DETECTED** `sessions_10min`
+
+📊 **Value:** 1,500.00 (↗ up)
+📈 **Expected range:** 900.00 - 1100.00
+📉 **Score:** 4.2 sigma
+
+🕒 **Time:** 2024-11-02 14:30:00
+```
+
+**When to use:**
+- You prioritize visual appeal over accessibility
+- Alerts only go to Mattermost/Slack (not email/SMS)
+- Team prefers colorful notifications
+
+---
+
+### 6. Minimal Template (`minimal_template.yaml`)
 
 Brief one-line alerts for high-frequency metrics:
 - Compact format
@@ -145,12 +171,12 @@ Brief one-line alerts for high-frequency metrics:
 
 **Example output:**
 ```
-⚠️ **api_latency_minimal**: 150.5ms (expected: 80-120ms, up) - 14:30:45
+**api_latency_minimal**: 150.5ms (expected: 80-120ms, up) @ 14:30:45
 ```
 
 ---
 
-### 6. Conditional Template (`conditional_template.yaml`) ✨ NEW
+### 7. Conditional Template (`conditional_template.yaml`)
 
 Different format based on severity or detector type:
 - Severity-based icons (🔴 critical, 🟠 high, 🟡 moderate)
@@ -163,32 +189,44 @@ Different format based on severity or detector type:
 dtk run examples/mattermost/conditional_template.yaml
 ```
 
+**Use case:** Severity indicators (emojis used meaningfully)
+
 ---
 
 ## Alert Message Format
 
 ### Default Format (No Custom Template)
 
-Mattermost alerts include:
+**Philosophy:** Simple, professional, universal.
+- ✅ No emojis - works everywhere (Mattermost, Slack, email, SMS, logs)
+- ✅ Accessible to screen readers
+- ✅ Professional appearance for corporate environments
+- ✅ Plain text with minimal Markdown
+
+**Default alert includes:**
 - Metric name and timestamp
-- Current value and direction (up/down)
-- Expected bounds (if available)
-- Anomaly score (sigma)
+- Current value
+- Expected range (if available from detector)
+- Anomaly score (statistical significance)
+- Direction (up/down)
 - Percent deviation
-- Detector metadata (algorithm, parameters)
+- Detector metadata (for debugging)
 
 **Example:**
 ```
-🚨 **ANOMALY DETECTED** `sessions_10min`
+**ANOMALY DETECTED: sessions_10min**
 
-📊 **Value:** 1,500.00 (↗ up)
-📈 **Expected:** [900.00 - 1,100.00]
-📉 **Score:** 4.2 sigma
-⚠️ **Deviation:** +36.4%
+Value: 1500.00
+Expected range: 900.00 - 1100.00
+Anomaly score: 4.20 sigma
+Direction: up
+Deviation: +36.4%
 
-🕒 2024-11-01 23:50:00
-🔍 **Detector:** mad, window: 30 days, n_sigma: 3.0
+Time: 2024-11-02 14:30:00
+Detector: type=mad, window=30 days, threshold=3.0 sigma
 ```
+
+**Want emojis?** See `rich_format.yaml` example for visually rich formatting.
 
 ---
 
@@ -236,15 +274,19 @@ Cooldown prevents alert spam:
 
 ---
 
-## Custom Message Templates ✨ NEW
+## Custom Message Templates
 
 ### Why Customize?
 
+The default format is intentionally simple and universal (no emojis, plain text).
+Customize alerts for your team's specific needs:
+
 - **Different language** (Russian, German, Spanish, etc.)
-- **Team preferences** (minimal vs detailed)
+- **Team preferences** (minimal vs detailed, with/without emojis)
 - **Dashboard links** (Grafana, Kibana, custom tools)
 - **Severity-based formatting** (critical, high, moderate)
 - **Context-specific info** (on-call mentions, runbooks)
+- **Visual richness** (emojis, colors) if accessibility isn't a concern
 
 ### Available Template Variables
 
@@ -275,34 +317,44 @@ Use built-in Jinja2 filters:
 
 ### Template Examples
 
-**Russian language:**
+**Russian language (no emojis):**
 ```yaml
 message_template: |
-  🚨 **АНОМАЛИЯ** `{{ metric_name }}`
-  Значение: {{ value | round(2) }}
-  Ожидалось: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
-  {{ timestamp.strftime('%d.%m.%Y %H:%M') }}
+  **АНОМАЛИЯ ОБНАРУЖЕНА: {{ metric_name }}**
+  Текущее значение: {{ value | round(2) }}
+  Ожидаемый диапазон: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
+  Время: {{ timestamp.strftime('%d.%m.%Y %H:%M') }}
 ```
 
 **Minimal one-liner:**
 ```yaml
 message_template: |
-  ⚠️ {{ metric_name }}: {{ value | round(1) }} ({{ direction }}) - {{ timestamp.strftime('%H:%M') }}
+  **{{ metric_name }}**: {{ value | round(1) }} ({{ direction }}) @ {{ timestamp.strftime('%H:%M') }}
 ```
 
 **With dashboard links:**
 ```yaml
 message_template: |
-  🚨 **ANOMALY** `{{ metric_name }}`
+  **ANOMALY: {{ metric_name }}**
 
   Value: {{ value | round(2) }}
   Expected: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
 
-  [Grafana](https://grafana.example.com/d/{{ metric_name }})
-  [Logs](https://kibana.example.com/?q={{ metric_name }})
+  [Grafana Dashboard](https://grafana.example.com/d/{{ metric_name }})
+  [View Logs](https://kibana.example.com/?q={{ metric_name }})
 ```
 
-**Severity-based:**
+**Rich format with emojis:**
+```yaml
+message_template: |
+  🚨 **ANOMALY DETECTED** `{{ metric_name }}`
+
+  📊 Value: {{ value | round(2) }} ({% if direction == 'up' %}↗{% else %}↘{% endif %} {{ direction }})
+  📈 Expected: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
+  🕒 Time: {{ timestamp.strftime('%H:%M:%S') }}
+```
+
+**Severity-based (meaningful emoji use):**
 ```yaml
 message_template: |
   {% if score >= 5.0 %}

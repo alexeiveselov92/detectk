@@ -1,0 +1,70 @@
+# Rich Format Example with Emojis
+#
+# This example shows a visually rich alert format with emojis and icons.
+# Use this if you want colorful, eye-catching alerts in Mattermost/Slack.
+#
+# Trade-offs:
+# ✅ Visually appealing, easy to scan
+# ✅ Emojis add color and emphasis
+# ❌ Not accessible to screen readers
+# ❌ Doesn't work well in plain text (email, SMS, logs)
+# ❌ May look unprofessional in some corporate environments
+
+name: "sessions_rich_format"
+description: "Example with rich emoji-based formatting"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT count() as value
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+    # Rich format with emojis and visual hierarchy
+    message_template: |
+      🚨 **ANOMALY DETECTED** `{{ metric_name }}`
+
+      📊 **Value:** {{ value | round(2) }}{% if direction %} ({% if direction == 'up' %}↗{% elif direction == 'down' %}↘{% else %}→{% endif %} {{ direction }}){% endif %}
+
+      {% if lower_bound and upper_bound %}
+      📈 **Expected range:** {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
+      {% endif %}
+      {% if score %}
+      {% if score == inf %}
+      📉 **Score:** ∞ (extreme outlier)
+      {% else %}
+      📉 **Score:** {{ score | round(2) }} sigma
+      {% endif %}
+      {% endif %}
+      {% if percent_deviation %}
+      ⚠️ **Deviation:** {{ percent_deviation | round(1) }}%
+      {% endif %}
+
+      🕒 **Time:** {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+
+      {% if metadata.detector %}
+      🔍 **Detector:** {{ metadata.detector }}{% if metadata.window_size %}, window: {{ metadata.window_size }}{% endif %}{% if metadata.n_sigma %}, threshold: {{ metadata.n_sigma }} sigma{% endif %}
+      {% endif %}
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"
