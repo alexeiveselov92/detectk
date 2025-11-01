@@ -1,0 +1,48 @@
+# DetectK Quickstart Example
+# This is a minimal working configuration that doesn't require external services
+#
+# To run this example:
+#   dtk run examples/quickstart/quickstart.yaml
+#
+# This example uses:
+# - ClickHouse collector (will fail if ClickHouse not available)
+# - Threshold detector (simple comparison)
+# - Mattermost alerter (will fail if webhook not configured)
+# - Storage disabled (no persistence needed for demo)
+
+name: "quickstart_example"
+description: "Minimal working example for testing DetectK pipeline"
+
+# Collector: Get data from ClickHouse
+# For testing without ClickHouse, this will fail gracefully
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "default"
+    # Simple query that returns a constant value
+    query: |
+      SELECT
+        100 as value,
+        now() as timestamp
+
+# Detector: Simple threshold check
+# Alert if value > 50
+detector:
+  type: "threshold"
+  params:
+    operator: "greater_than"
+    threshold: 50
+
+# Alerter: Mattermost webhook
+# Set MATTERMOST_WEBHOOK env variable or use dummy URL for testing
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK:-https://mattermost.example.com/hooks/dummy}"
+    cooldown_minutes: 0  # Disable cooldown for testing
+
+# Storage: Disabled for quickstart
+storage:
+  enabled: false

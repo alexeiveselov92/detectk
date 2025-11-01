@@ -290,6 +290,212 @@ def list_alerters() -> None:
         click.echo(f"  • {name:15s} - {description}")
 
 
+@cli.command()
+@click.argument("output_path", type=click.Path(path_type=Path), default="metric_config.yaml")
+@click.option(
+    "--detector",
+    "-d",
+    type=click.Choice(["threshold", "mad", "zscore"]),
+    default="threshold",
+    help="Detector type to use in template",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Overwrite existing file",
+)
+def init(output_path: Path, detector: str, overwrite: bool) -> None:
+    """Generate template configuration file.
+
+    OUTPUT_PATH: Path where to create config file (default: metric_config.yaml)
+
+    \b
+    Examples:
+        # Create template with threshold detector
+        dtk init
+
+        # Create template with MAD detector
+        dtk init my_config.yaml -d mad
+
+        # Overwrite existing file
+        dtk init my_config.yaml --overwrite
+    """
+    # Check if file exists
+    if output_path.exists() and not overwrite:
+        click.echo(f"❌ File already exists: {output_path}", err=True)
+        click.echo("   Use --overwrite to replace it", err=True)
+        sys.exit(1)
+
+    # Template configurations for different detectors
+    templates = {
+        "threshold": """# DetectK Configuration - Threshold Detector
+# Simple threshold-based anomaly detection
+
+name: "my_metric"
+description: "Describe your metric here"
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "your_database"
+    query: |
+      SELECT
+        count(*) as value,
+        now() as timestamp
+      FROM your_table
+      WHERE timestamp >= now() - INTERVAL 1 HOUR
+
+# Anomaly Detection
+detector:
+  type: "threshold"
+  params:
+    operator: "greater_than"  # greater_than, less_than, between, outside, etc.
+    threshold: 1000           # Adjust based on your metric
+
+# Alert Delivery
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60  # Wait 1 hour between alerts
+
+# Historical Data Storage (optional)
+storage:
+  enabled: false  # Set to true to enable historical data storage
+  # type: "clickhouse"
+  # params:
+  #   host: "${CLICKHOUSE_HOST:-localhost}"
+  #   database: "detectk"
+  #   datapoints_retention_days: 90
+""",
+        "mad": """# DetectK Configuration - MAD Detector
+# Statistical anomaly detection using Median Absolute Deviation
+# Robust to outliers, good for "dirty" data
+
+name: "my_metric"
+description: "Describe your metric here"
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "your_database"
+    query: |
+      SELECT
+        count(*) as value,
+        now() as timestamp
+      FROM your_table
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+# Anomaly Detection
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"   # Historical window for comparison
+    n_sigma: 3.0             # Alert if value > median + 3*MAD_sigma
+    use_weighted: true       # Weight recent data more (exponential decay)
+    exp_decay_factor: 0.1    # Higher = more weight to recent data
+
+# Alert Delivery
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+# Historical Data Storage (required for MAD detector)
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"
+    datapoints_retention_days: 90
+    save_detections: false  # Save space - only store raw values
+""",
+        "zscore": """# DetectK Configuration - Z-Score Detector
+# Statistical anomaly detection using mean and standard deviation
+# Faster than MAD, less robust to outliers
+
+name: "my_metric"
+description: "Describe your metric here"
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "your_database"
+    query: |
+      SELECT
+        sum(amount) as value,
+        now() as timestamp
+      FROM transactions
+      WHERE timestamp >= now() - INTERVAL 1 HOUR
+
+# Anomaly Detection
+detector:
+  type: "zscore"
+  params:
+    window_size: "7 days"    # Historical window for comparison
+    n_sigma: 3.0             # Alert if value > mean + 3*std
+    use_weighted: true       # Weight recent data more
+    exp_decay_factor: 0.1
+
+# Alert Delivery
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 120  # Wait 2 hours for revenue alerts
+
+# Historical Data Storage (required for Z-score detector)
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"
+    datapoints_retention_days: 90
+    save_detections: false
+""",
+    }
+
+    # Get template content
+    template_content = templates[detector]
+
+    # Write to file
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(template_content)
+
+        click.echo(f"✅ Created configuration file: {output_path}")
+        click.echo()
+        click.echo(f"Detector type: {detector}")
+        click.echo()
+        click.echo("Next steps:")
+        click.echo("1. Edit the configuration file:")
+        click.echo(f"   - Update collector query for your data")
+        click.echo(f"   - Adjust detector parameters")
+        click.echo(f"   - Set CLICKHOUSE_HOST and MATTERMOST_WEBHOOK environment variables")
+        click.echo()
+        click.echo("2. Validate configuration:")
+        click.echo(f"   dtk validate {output_path}")
+        click.echo()
+        click.echo("3. Run metric check:")
+        click.echo(f"   dtk run {output_path}")
+
+    except Exception as e:
+        click.echo(f"❌ Error creating file: {e}", err=True)
+        sys.exit(1)
+
+
 def main() -> None:
     """Entry point for the CLI."""
     cli()
