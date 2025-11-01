@@ -1,0 +1,45 @@
+# Simple Z-Score detection
+# Uses mean and standard deviation - assumes data is approximately normal
+# Faster than MAD, but less robust to outliers
+
+name: "sessions_zscore_simple"
+description: "Z-Score detector with 7-day window and weighted statistics"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        count() as value,
+        now() as timestamp
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "zscore"
+  params:
+    window_size: "7 days"
+    n_sigma: 3.0  # Alert if value > mean + 3*std
+    use_weighted: true  # Recent data weighted more (exponential decay)
+    exp_decay_factor: 0.1  # Higher = more weight to recent data
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "default"
+    save_detections: false
+
+# When to use Z-Score vs MAD:
+# - Z-Score: Clean data, approximately normal distribution, fast
+# - MAD: Noisy data with outliers, robust, slower
+# - If unsure → start with MAD (more robust)
