@@ -60,6 +60,58 @@ storage:
     save_detections: false  # Optional: save detection results
 ```
 
+### Multiple Detectors (A/B Testing)
+
+```yaml
+# config.yaml - Compare multiple detection strategies
+name: "sessions_10min"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "localhost"
+    database: "analytics"
+    query: "SELECT count() as value, now() as timestamp FROM sessions"
+
+# Multiple detectors with auto-generated IDs
+detectors:
+  - type: "mad"
+    params:
+      window_size: "30 days"
+      n_sigma: 3.0
+    # ID auto-generated: e.g., "a1b2c3d4"
+
+  - type: "mad"
+    params:
+      window_size: "30 days"
+      n_sigma: 5.0
+    # ID auto-generated: e.g., "b2c3d4e5" (different from above)
+
+  - id: "zscore_7d"  # Manual ID override
+    type: "zscore"
+    params:
+      window_size: "7 days"
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "localhost"
+    database: "default"
+    save_detections: true  # Save all detector results for comparison
+```
+
+**How it works:**
+- Each detector gets a unique ID (auto-generated 8-char hash or manual)
+- All detector results are saved to `dtk_detections` with their `detector_id`
+- Alert sent if ANY detector finds anomaly (configurable in future)
+- Query results: `SELECT * FROM dtk_detections WHERE metric_name = 'sessions_10min' ORDER BY detected_at, detector_id`
+
 ## Configuration
 
 ### Collector Parameters
@@ -110,17 +162,27 @@ Detection results (optional, for audit/cooldown):
 CREATE TABLE dtk_detections (
     id UInt64,
     metric_name String,
+    detector_id String,  -- Unique detector identifier (for multi-detector support)
     detected_at DateTime64(3),
     value Float64,
     is_anomaly UInt8,
     anomaly_score Nullable(Float64),
     lower_bound Nullable(Float64),
     upper_bound Nullable(Float64),
-    ...
+    direction Nullable(String),
+    percent_deviation Nullable(Float64),
+    detector_type String,
+    detector_params String,  -- JSON with full params for transparency
+    alert_sent UInt8,
+    alert_reason Nullable(String),
+    alerter_type Nullable(String),
+    context String  -- JSON
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(detected_at)
-ORDER BY (metric_name, detected_at);
+ORDER BY (metric_name, detector_id, detected_at);
 ```
+
+**Multi-Detector Support**: The `detector_id` field allows storing results from multiple detectors for the same metric. Each detector gets a unique ID (auto-generated or manual), enabling A/B testing and parameter tuning.
 
 Tables are created automatically on first use.
 

@@ -67,12 +67,13 @@ class MockStorage(BaseStorage):
         self,
         metric_name: str,
         detection: Any,
+        detector_id: str,
         alert_sent: bool = False,
         alert_reason: str | None = None,
         alerter_type: str | None = None,
     ) -> None:
         """Track saved detection."""
-        self.saved_detections.append((metric_name, detection, alert_sent))
+        self.saved_detections.append((metric_name, detection, detector_id, alert_sent))
 
     def query_detections(
         self,

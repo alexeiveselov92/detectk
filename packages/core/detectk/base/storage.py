@@ -153,6 +153,7 @@ class BaseStorage(ABC):
         self,
         metric_name: str,
         detection: DetectionResult,
+        detector_id: str,
         alert_sent: bool = False,
         alert_reason: str | None = None,
         alerter_type: str | None = None,
@@ -161,9 +162,13 @@ class BaseStorage(ABC):
 
         This method should only save if storage config has save_detections=true.
 
+        The detector_id parameter allows multiple detectors per metric.
+        Each detector's results are stored separately and can be queried independently.
+
         Args:
             metric_name: Name of metric
             detection: Detection result with anomaly status and bounds
+            detector_id: Unique detector identifier (from DetectorConfig.id)
             alert_sent: Whether alert was sent for this detection
             alert_reason: Reason for alert (if sent)
             alerter_type: Type of alerter used (e.g., "mattermost")
@@ -185,6 +190,7 @@ class BaseStorage(ABC):
             >>> storage.save_detection(
             ...     "sessions_10min",
             ...     result,
+            ...     detector_id="a1b2c3d4",  # Auto-generated hash ID
             ...     alert_sent=True,
             ...     alert_reason="Anomaly detected: score=4.2"
             ... )

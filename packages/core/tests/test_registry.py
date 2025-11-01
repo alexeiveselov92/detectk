@@ -51,6 +51,7 @@ class MockStorage(BaseStorage):
         self,
         metric_name: str,
         detection: DetectionResult,
+        detector_id: str,
         alert_sent: bool = False,
         alert_reason: str | None = None,
         alerter_type: str | None = None,

@@ -69,6 +69,7 @@ class ClickHouseStorage(BaseStorage):
     CREATE TABLE IF NOT EXISTS dtk_detections (
         id UInt64,
         metric_name String,
+        detector_id String,  -- Unique detector identifier (for multi-detector support)
         detected_at DateTime64(3),
         value Float64,
         is_anomaly UInt8,  -- Boolean as UInt8
@@ -78,14 +79,14 @@ class ClickHouseStorage(BaseStorage):
         direction Nullable(String),
         percent_deviation Nullable(Float64),
         detector_type String,
-        detector_params String,  -- JSON string
+        detector_params String,  -- JSON string with full params for transparency
         alert_sent UInt8,
         alert_reason Nullable(String),
         alerter_type Nullable(String),
         context String  -- JSON string
     ) ENGINE = MergeTree()
     PARTITION BY toYYYYMM(detected_at)
-    ORDER BY (metric_name, detected_at)
+    ORDER BY (metric_name, detector_id, detected_at)
     SETTINGS index_granularity = 8192;
     """
 
@@ -313,6 +314,7 @@ class ClickHouseStorage(BaseStorage):
         self,
         metric_name: str,
         detection: DetectionResult,
+        detector_id: str,
         alert_sent: bool = False,
         alert_reason: str | None = None,
         alerter_type: str | None = None,
@@ -322,6 +324,7 @@ class ClickHouseStorage(BaseStorage):
         Args:
             metric_name: Name of metric
             detection: Detection result
+            detector_id: Unique detector identifier (from DetectorConfig.id)
             alert_sent: Whether alert was sent
             alert_reason: Reason for alert
             alerter_type: Type of alerter used
@@ -335,8 +338,11 @@ class ClickHouseStorage(BaseStorage):
         try:
             client = self._get_client()
 
-            # Generate ID
-            row_id = int(detection.timestamp.timestamp() * 1_000_000)
+            # Generate ID that includes detector_id for uniqueness
+            # Format: timestamp_microseconds + hash(detector_id)
+            timestamp_part = int(detection.timestamp.timestamp() * 1_000_000)
+            detector_hash = abs(hash(detector_id)) % 1_000_000  # 6-digit hash
+            row_id = timestamp_part * 1_000_000 + detector_hash
 
             # Serialize metadata to JSON
             detector_params_json = json.dumps(detection.metadata) if detection.metadata else "{}"
@@ -346,7 +352,7 @@ class ClickHouseStorage(BaseStorage):
             client.execute(
                 """
                 INSERT INTO dtk_detections (
-                    id, metric_name, detected_at, value, is_anomaly, anomaly_score,
+                    id, metric_name, detector_id, detected_at, value, is_anomaly, anomaly_score,
                     lower_bound, upper_bound, direction, percent_deviation,
                     detector_type, detector_params, alert_sent, alert_reason, alerter_type, context
                 ) VALUES
@@ -355,6 +361,7 @@ class ClickHouseStorage(BaseStorage):
                     (
                         row_id,
                         metric_name,
+                        detector_id,
                         detection.timestamp,
                         detection.value,
                         1 if detection.is_anomaly else 0,
@@ -373,7 +380,7 @@ class ClickHouseStorage(BaseStorage):
                 ],
             )
 
-            logger.debug(f"Saved detection for {metric_name}: anomaly={detection.is_anomaly}")
+            logger.debug(f"Saved detection for {metric_name} (detector={detector_id}): anomaly={detection.is_anomaly}")
 
         except ClickHouseError as e:
             raise StorageError(

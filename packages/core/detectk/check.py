@@ -111,23 +111,38 @@ class MetricCheck:
                 logger.info(f"Saving datapoint to storage for metric: {metric_name}")
                 self._save_to_storage(config, metric_name, datapoint, errors)
 
-            # Step 4: Run anomaly detection
+            # Step 4: Run anomaly detection (possibly multiple detectors)
             logger.info(f"Running detection for metric: {metric_name}")
-            detection = self._run_detection(config, metric_name, datapoint, errors)
+            detections = self._run_detections(config, metric_name, datapoint, errors)
 
-            # Step 5: Decide if alert should be sent
+            # Step 5: Decide if alert should be sent (based on all detectors)
             alert_sent = False
             alert_reason = None
 
-            if detection.is_anomaly:
+            # Check if any detector found anomaly
+            any_anomaly = any(d.is_anomaly for d in detections)
+
+            if any_anomaly:
                 logger.info(f"Anomaly detected for metric: {metric_name}")
-                alert_sent, alert_reason = self._send_alert(config, detection, errors)
+                # For now, send alert if ANY detector finds anomaly
+                # TODO: Make alert strategy configurable (any/all/majority)
+                alert_sent, alert_reason = self._send_alert(config, detections, errors)
 
             # Step 6: Build final result
+            # For backward compatibility, use first detection as primary
+            # TODO: Update CheckResult model to support multiple detections
+            primary_detection = detections[0] if detections else DetectionResult(
+                metric_name=metric_name,
+                timestamp=datapoint.timestamp,
+                value=datapoint.value,
+                is_anomaly=False,
+                score=0.0,
+            )
+
             result = CheckResult(
                 metric_name=metric_name,
                 datapoint=datapoint,
-                detection=detection,
+                detection=primary_detection,
                 alert_sent=alert_sent,
                 alert_reason=alert_reason,
                 errors=errors,
@@ -276,14 +291,14 @@ class MetricCheck:
             logger.error(error_msg, exc_info=True)
             errors.append(error_msg)
 
-    def _run_detection(
+    def _run_detections(
         self,
         config: MetricConfig,
         metric_name: str,
         datapoint: DataPoint,
         errors: list[str],
-    ) -> DetectionResult:
-        """Run anomaly detection.
+    ) -> list[DetectionResult]:
+        """Run anomaly detection with all configured detectors.
 
         Args:
             config: Metric configuration
@@ -292,14 +307,17 @@ class MetricCheck:
             errors: List to append errors to
 
         Returns:
-            DetectionResult (with is_anomaly=False on error)
+            List of DetectionResult (one per detector)
         """
-        try:
-            # Get detector class from registry
-            detector_class = DetectorRegistry.get(config.detector.type)
+        detections = []
 
-            # Get or create storage for detector
-            if config.storage.enabled:
+        # Get list of detectors (handles both single and multiple)
+        detector_configs = config.get_detectors()
+
+        # Get storage once (shared by all detectors)
+        storage = None
+        if config.storage.enabled:
+            try:
                 if not config.storage.type:
                     storage_type = config.collector.type
                 else:
@@ -307,48 +325,116 @@ class MetricCheck:
 
                 storage_class = StorageRegistry.get(storage_type)
                 storage = storage_class(config.storage.params)
-            else:
-                # No storage - detector must work without historical data
-                storage = None  # type: ignore
+            except Exception as e:
+                error_msg = f"Failed to create storage for detectors: {e}"
+                logger.error(error_msg, exc_info=True)
+                errors.append(error_msg)
+                storage = None
 
-            # Create detector instance with storage
-            detector = detector_class(storage=storage, **config.detector.params)
+        # Run each detector
+        for detector_config in detector_configs:
+            try:
+                # Get detector class from registry
+                detector_class = DetectorRegistry.get(detector_config.type)
 
-            # Run detection
-            detection = detector.detect(
-                metric_name=metric_name,
-                value=datapoint.value,
-                timestamp=datapoint.timestamp,
+                # Create detector instance with storage
+                detector = detector_class(storage=storage, **detector_config.params)
+
+                # Run detection
+                detection = detector.detect(
+                    metric_name=metric_name,
+                    value=datapoint.value,
+                    timestamp=datapoint.timestamp,
+                )
+
+                # Add detector_id to metadata for tracking
+                # Since DetectionResult is frozen, we need to create a new instance
+                updated_metadata = detection.metadata.copy() if detection.metadata else {}
+                updated_metadata["detector_id"] = detector_config.id
+                updated_metadata["detector_type"] = detector_config.type
+
+                # Create new detection with updated metadata
+                detection_with_id = DetectionResult(
+                    metric_name=detection.metric_name,
+                    timestamp=detection.timestamp,
+                    value=detection.value,
+                    is_anomaly=detection.is_anomaly,
+                    score=detection.score,
+                    lower_bound=detection.lower_bound,
+                    upper_bound=detection.upper_bound,
+                    direction=detection.direction,
+                    percent_deviation=detection.percent_deviation,
+                    metadata=updated_metadata,
+                )
+
+                detections.append(detection_with_id)
+
+                # Save detection result to storage (if enabled)
+                if storage and config.storage.params.get("save_detections", False):
+                    try:
+                        storage.save_detection(
+                            metric_name=metric_name,
+                            detection=detection_with_id,
+                            detector_id=detector_config.id,
+                            alert_sent=False,  # Will be updated later if alert sent
+                        )
+                    except Exception as e:
+                        error_msg = f"Failed to save detection for detector {detector_config.id}: {e}"
+                        logger.error(error_msg, exc_info=True)
+                        errors.append(error_msg)
+
+                logger.debug(
+                    f"Detector {detector_config.id} result: "
+                    f"anomaly={detection.is_anomaly}, score={detection.score}"
+                )
+
+            except Exception as e:
+                error_msg = f"Failed to run detector {detector_config.id}: {e}"
+                logger.error(error_msg, exc_info=True)
+                errors.append(error_msg)
+
+                # Add error detection result
+                detections.append(
+                    DetectionResult(
+                        metric_name=metric_name,
+                        timestamp=datapoint.timestamp,
+                        value=datapoint.value,
+                        is_anomaly=False,
+                        score=0.0,
+                        metadata={
+                            "detector_id": detector_config.id,
+                            "detector_type": detector_config.type,
+                            "error": str(e)
+                        },
+                    )
+                )
+
+        # If no detections (all failed), return single error detection
+        if not detections:
+            detections.append(
+                DetectionResult(
+                    metric_name=metric_name,
+                    timestamp=datapoint.timestamp,
+                    value=datapoint.value,
+                    is_anomaly=False,
+                    score=0.0,
+                    metadata={"error": "All detectors failed"},
+                )
             )
 
-            return detection
-
-        except Exception as e:
-            error_msg = f"Failed to run detection: {e}"
-            logger.error(error_msg, exc_info=True)
-            errors.append(error_msg)
-
-            # Return non-anomaly result on error
-            return DetectionResult(
-                metric_name=metric_name,
-                timestamp=datapoint.timestamp,
-                value=datapoint.value,
-                is_anomaly=False,
-                score=0.0,
-                metadata={"error": str(e)},
-            )
+        return detections
 
     def _send_alert(
         self,
         config: MetricConfig,
-        detection: DetectionResult,
+        detections: list[DetectionResult],
         errors: list[str],
     ) -> tuple[bool, str | None]:
         """Send alert if conditions are met.
 
         Args:
             config: Metric configuration
-            detection: Detection result
+            detections: List of detection results from all detectors
             errors: List to append errors to
 
         Returns:
@@ -358,12 +444,13 @@ class MetricCheck:
             # Parse alert conditions
             alert_conditions = AlertConditions(**config.alerter.conditions)
 
-            # For now, send alert immediately if anomaly detected
+            # For now, send alert if ANY detector found anomaly
+            # TODO: Make alert strategy configurable (any/all/majority)
             # TODO: Implement AlertAnalyzer for sophisticated logic
             # (consecutive anomalies, direction filtering, cooldown)
-            should_alert = detection.is_anomaly
+            anomalous_detections = [d for d in detections if d.is_anomaly]
 
-            if not should_alert:
+            if not anomalous_detections:
                 return False, None
 
             # Get alerter class from registry
@@ -372,12 +459,23 @@ class MetricCheck:
             # Create alerter instance
             alerter = alerter_class(config.alerter.params)
 
-            # Send alert
-            success = alerter.send(detection)
+            # Send alert for first anomalous detection
+            # TODO: Update alerters to handle multiple detections
+            primary_detection = anomalous_detections[0]
+            success = alerter.send(primary_detection)
 
             if success:
-                reason = f"Anomaly detected: score={detection.score:.2f}"
-                logger.info(f"Alert sent successfully: {detection.metric_name}")
+                # Build reason mentioning all anomalous detectors
+                detector_ids = [d.metadata.get("detector_id", "unknown") for d in anomalous_detections]
+                if len(detector_ids) == 1:
+                    reason = f"Anomaly detected by detector {detector_ids[0]}: score={primary_detection.score:.2f}"
+                else:
+                    reason = (
+                        f"Anomalies detected by {len(detector_ids)} detectors "
+                        f"({', '.join(detector_ids)}): primary_score={primary_detection.score:.2f}"
+                    )
+
+                logger.info(f"Alert sent successfully: {primary_detection.metric_name}")
                 return True, reason
             else:
                 error_msg = "Alert sending failed (returned False)"
