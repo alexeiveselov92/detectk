@@ -188,7 +188,7 @@ class ConfigLoader:
         # Step 2: Jinja2 template rendering (if context provided)
         if template_context:
             try:
-                template = Template(content_with_env, undefined=StrictUndefined)
+                template = self.jinja_env.from_string(content_with_env)
                 content_rendered = template.render(**template_context)
             except TemplateError as e:
                 raise ConfigurationError(f"Jinja2 template rendering failed: {e}")
