@@ -90,13 +90,13 @@ alerter:
 
 ```bash
 # Run once
-detectk run configs/sessions_10min.yaml
+dtk run configs/sessions_10min.yaml
 
 # Run all metrics in directory
-detectk run configs/
+dtk run configs/
 
 # Run with backtesting
-detectk backtest configs/sessions_10min.yaml \
+dtk backtest configs/sessions_10min.yaml \
   --start 2024-01-01 \
   --end 2024-02-01 \
   --step "10 minutes"
