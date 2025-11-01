@@ -19,11 +19,17 @@ DETECTOR_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "mad": {
         "n_sigma": 3.0,
+        "use_weighted": True,
+        "exp_decay_factor": 0.1,
         "seasonal_features": [],
+        "use_combined_seasonality": False,
     },
     "zscore": {
         "n_sigma": 3.0,
+        "use_weighted": True,
+        "exp_decay_factor": 0.1,
         "seasonal_features": [],
+        "use_combined_seasonality": False,
     },
     # Add more detector defaults as detectors are implemented
 }

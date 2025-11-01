@@ -1,0 +1,63 @@
+# MAD detector with seasonal grouping
+# Groups historical data by hour_of_day and day_of_week
+
+name: "sessions_mad_seasonal"
+description: "MAD detector with seasonal features (hour + day_of_week)"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        count() as value,
+        now() as timestamp,
+        toHour(now()) as hour_of_day,
+        toDayOfWeek(now()) as day_of_week
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+# Store seasonal features in context
+# These will be saved to dtk_datapoints.context column (JSONB)
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+    exp_decay_factor: 0.1
+    # Seasonal features to group by
+    seasonal_features:
+      - "hour_of_day"
+      - "day_of_week"
+    # use_combined_seasonality:
+    #   false = union of groups (more data, less precise)
+    #   true = intersection (less data, more precise)
+    use_combined_seasonality: false
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "default"
+    save_detections: false
+
+# How it works:
+# 1. Collector returns value + hour_of_day + day_of_week
+# 2. Storage saves to dtk_datapoints with context = {"hour_of_day": 14, "day_of_week": 1}
+# 3. Detector loads 30-day window and filters by matching seasonal features
+# 4. If use_combined_seasonality=false:
+#    Uses union: (hour=14) OR (dow=1) - more data
+# 5. If use_combined_seasonality=true:
+#    Uses intersection: (hour=14) AND (dow=1) - less data, more precise
+# 6. Calculates MAD only for matching group
+# 7. Alerts if current value is anomalous for this seasonal group

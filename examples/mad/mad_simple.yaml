@@ -1,0 +1,39 @@
+# Simple MAD (Median Absolute Deviation) detection
+# Robust to outliers, better than Z-score for "dirty" data
+
+name: "sessions_mad_simple"
+description: "MAD detector with 30-day window and weighted statistics"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        count() as value,
+        now() as timestamp
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0  # Alert if value > median + 3*MAD_sigma
+    use_weighted: true  # Recent data weighted more (exponential decay)
+    exp_decay_factor: 0.1  # Higher = more weight to recent data
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "default"
+    save_detections: false  # Don't save detection results (save space)
