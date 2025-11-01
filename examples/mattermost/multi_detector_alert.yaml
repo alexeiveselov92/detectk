@@ -1,0 +1,80 @@
+# Multi-Detector Mattermost Alert Example
+#
+# Uses multiple detectors with different sensitivities
+# Compares MAD and Z-Score algorithms on same metric
+#
+# Use case: A/B testing detection strategies before production deployment
+# Alert sent if ANY detector finds anomaly
+#
+# Usage:
+#   dtk run examples/mattermost/multi_detector_alert.yaml
+
+name: "active_users_5min"
+description: "Monitor active users with multiple detection strategies"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT uniqExact(user_id) as value
+      FROM events
+      WHERE timestamp >= now() - INTERVAL 5 MINUTE
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    connection_string: "clickhouse://${CLICKHOUSE_HOST:-localhost}:9000/detectk"
+    datapoints_retention_days: 90
+    save_detections: true  # Save all detector results for comparison
+
+# Multiple detectors - each gets auto-generated ID
+detectors:
+  # Conservative MAD detector (fewer false positives)
+  - type: "mad"
+    params:
+      window_size: "30 days"
+      n_sigma: 5.0  # Higher threshold = less sensitive
+      use_weighted: true
+      exp_decay_factor: 0.1
+    # Auto ID based on params: e.g., "a1b2c3d4"
+
+  # Aggressive MAD detector (catch more anomalies)
+  - type: "mad"
+    params:
+      window_size: "30 days"
+      n_sigma: 3.0  # Lower threshold = more sensitive
+      use_weighted: true
+      exp_decay_factor: 0.1
+    # Different ID because n_sigma differs: e.g., "b2c3d4e5"
+
+  # Z-Score for comparison (faster, less robust to outliers)
+  - id: "zscore_7d"  # Manual ID override
+    type: "zscore"
+    params:
+      window_size: "7 days"  # Shorter window for faster adaptation
+      n_sigma: 3.0
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 30  # Shorter cooldown for testing
+    username: "Multi-Detector Test"
+
+# Query detector performance:
+# SELECT
+#     detector_id,
+#     detector_type,
+#     detector_params,
+#     COUNT(*) as total_checks,
+#     SUM(is_anomaly) as anomalies_detected,
+#     AVG(anomaly_score) as avg_score
+# FROM dtk_detections
+# WHERE metric_name = 'active_users_5min'
+#   AND detected_at >= now() - INTERVAL 7 DAY
+# GROUP BY detector_id, detector_type, detector_params
+# ORDER BY anomalies_detected DESC;

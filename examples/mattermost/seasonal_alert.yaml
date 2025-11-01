@@ -1,0 +1,55 @@
+# Seasonal Mattermost Alert Example
+#
+# Monitors revenue with seasonal patterns (hour-of-day, day-of-week)
+# Accounts for different behavior patterns during different times
+#
+# Example: Revenue is naturally higher during peak hours (afternoon)
+# and lower at night - detector learns these patterns
+#
+# Usage:
+#   dtk run examples/mattermost/seasonal_alert.yaml
+
+name: "revenue_hourly"
+description: "Monitor hourly revenue with seasonal patterns"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT sum(amount) as value
+      FROM transactions
+      WHERE timestamp >= now() - INTERVAL 1 HOUR
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    connection_string: "clickhouse://${CLICKHOUSE_HOST:-localhost}:9000/detectk"
+    datapoints_retention_days: 90
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+    exp_decay_factor: 0.1
+    # Seasonal features - detector groups data by these patterns
+    seasonal_features:
+      - name: "hour_of_day"
+        expression: "toHour(collected_at)"  # 0-23
+      - name: "day_of_week"
+        expression: "toDayOfWeek(collected_at)"  # 1=Monday, 7=Sunday
+    # Separate seasonality: compare to same hour AND day-of-week
+    # (e.g., Monday 3pm compared to other Monday 3pm values)
+    use_combined_seasonality: true
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 120  # Wait 2 hours for revenue alerts (less noisy)
+    username: "Revenue Monitor"

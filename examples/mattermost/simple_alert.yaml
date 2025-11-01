@@ -1,0 +1,48 @@
+# Simple Mattermost Alert Example
+#
+# Monitors sessions count every 10 minutes using MAD detector
+# Sends alert to Mattermost channel when anomaly detected
+#
+# Prerequisites:
+# 1. Set CLICKHOUSE_HOST environment variable
+# 2. Set MATTERMOST_WEBHOOK environment variable (from Mattermost integrations)
+#
+# Usage:
+#   dtk run examples/mattermost/simple_alert.yaml
+
+name: "sessions_10min"
+description: "Monitor active sessions every 10 minutes"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT count() as value
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    connection_string: "clickhouse://${CLICKHOUSE_HOST:-localhost}:9000/detectk"
+    datapoints_retention_days: 90
+    save_detections: false  # Don't save detection results (optional)
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"  # Use 30 days of history
+    n_sigma: 3.0            # Alert when value is 3 sigma away from median
+    use_weighted: true       # Weight recent data more heavily
+    exp_decay_factor: 0.1
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60     # Wait 60 minutes between alerts for same metric
+    username: "DetectK Bot"  # Bot name in Mattermost
