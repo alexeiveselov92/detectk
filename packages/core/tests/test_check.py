@@ -47,13 +47,14 @@ class MockStorage(BaseStorage):
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.saved_data: list[tuple[str, DataPoint]] = []
+        self.saved_datapoints: list[tuple[str, DataPoint]] = []
+        self.saved_detections: list[tuple[str, Any]] = []
 
-    def save(self, metric_name: str, datapoint: DataPoint) -> None:
+    def save_datapoint(self, metric_name: str, datapoint: DataPoint) -> None:
         """Track saved datapoint."""
-        self.saved_data.append((metric_name, datapoint))
+        self.saved_datapoints.append((metric_name, datapoint))
 
-    def query(
+    def query_datapoints(
         self,
         metric_name: str,
         window: str | int,
@@ -62,8 +63,33 @@ class MockStorage(BaseStorage):
         """Return empty dataframe."""
         return pd.DataFrame({"timestamp": [], "value": []})
 
-    def delete(self, metric_name: str, older_than: datetime) -> int:
-        return 0
+    def save_detection(
+        self,
+        metric_name: str,
+        detection: Any,
+        alert_sent: bool = False,
+        alert_reason: str | None = None,
+        alerter_type: str | None = None,
+    ) -> None:
+        """Track saved detection."""
+        self.saved_detections.append((metric_name, detection, alert_sent))
+
+    def query_detections(
+        self,
+        metric_name: str,
+        window: str | int,
+        end_time: datetime | None = None,
+        anomalies_only: bool = False,
+    ) -> pd.DataFrame:
+        """Return empty dataframe."""
+        return pd.DataFrame()
+
+    def cleanup_old_data(
+        self,
+        datapoints_retention_days: int,
+        detections_retention_days: int | None = None,
+    ) -> tuple[int, int]:
+        return 0, 0
 
     def validate_config(self, config: dict[str, Any]) -> None:
         pass

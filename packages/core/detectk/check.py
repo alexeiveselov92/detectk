@@ -266,8 +266,8 @@ class MetricCheck:
             # Create storage instance
             storage = storage_class(config.storage.params)
 
-            # Save datapoint
-            storage.save(metric_name, datapoint)
+            # Save datapoint to dtk_datapoints table
+            storage.save_datapoint(metric_name, datapoint)
 
             logger.debug(f"Saved datapoint to storage: {metric_name}")
 
