@@ -13,25 +13,47 @@ class DataPoint:
     """Single metric measurement collected from data source.
 
     This represents a single point in time for a metric, with its value
-    and optional metadata.
+    and optional metadata. Supports missing data detection.
 
     Attributes:
         timestamp: Time of measurement
-        value: Metric value (always float for consistency)
+        value: Metric value (float or None if missing)
+               None indicates missing data (query returned no rows, partition missing, etc.)
         metadata: Optional additional context (e.g., raw value before casting,
-                 seasonal features, custom tags)
+                 seasonal features, custom tags, missing data indicators)
+        is_missing: Whether data is missing (explicit flag)
+                   True = query returned no data, partition missing, etc.
+                   False = normal data point with value
+        last_known_timestamp: Last time data was actually available (for staleness tracking)
+                             Used to detect when data stream has stopped
 
-    Example:
+    Missing Data Indicators:
+        - value=None and is_missing=True: No data available
+        - value=0.0 with metadata["is_empty_result"]=True: Backward compatibility (Phase 2)
+        - last_known_timestamp: Track data freshness
+
+    Example (Normal data):
         >>> point = DataPoint(
         ...     timestamp=datetime.now(),
         ...     value=1234.5,
-        ...     metadata={"raw_value": 1234, "source": "clickhouse"}
+        ...     metadata={"source": "clickhouse"}
+        ... )
+
+    Example (Missing data):
+        >>> point = DataPoint(
+        ...     timestamp=datetime.now(),
+        ...     value=None,
+        ...     is_missing=True,
+        ...     last_known_timestamp=datetime(2024, 1, 1, 10, 0),
+        ...     metadata={"reason": "partition_missing"}
         ... )
     """
 
     timestamp: datetime
-    value: float
+    value: float | None  # None = missing data
     metadata: dict[str, Any] | None = None
+    is_missing: bool = False  # Explicit missing data flag
+    last_known_timestamp: datetime | None = None  # For staleness tracking
 
 
 @dataclass(frozen=True)
@@ -54,6 +76,8 @@ class DetectionResult:
         direction: Direction of anomaly if detected
                   "up" - value above expected
                   "down" - value below expected
+                  "missing" - data is missing
+                  "stale" - data is too old
                   None - not anomalous or threshold-based
         percent_deviation: Percentage deviation from expected value
                           Calculated as: (value - expected) / abs(expected) * 100

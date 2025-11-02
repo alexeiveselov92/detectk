@@ -154,10 +154,9 @@ class ClickHouseCollector(BaseCollector):
             WHERE timestamp > now() - INTERVAL 10 MINUTE
 
         Note on Empty Results:
-            If query returns no rows, returns DataPoint with value=0.0
-            and metadata flag "is_empty_result": True.
-            This allows detectors to handle missing data scenarios.
-            Phase 3 will add explicit missing data detection.
+            If query returns no rows, returns DataPoint with value=None
+            and is_missing=True flag.
+            This allows explicit missing data detection.
         """
         at_time = at_time or datetime.now()
 
@@ -176,18 +175,19 @@ class ClickHouseCollector(BaseCollector):
             if not result:
                 logger.warning(
                     "ClickHouse query returned no rows. "
-                    "Treating as value=0.0 with is_empty_result flag. "
-                    "Consider using aggregate functions that always return a row."
+                    "Returning DataPoint with is_missing=True. "
+                    "Consider using aggregate functions (e.g., count()) that always return a row."
                 )
                 return DataPoint(
                     timestamp=at_time,
-                    value=0.0,
+                    value=None,  # Explicit None for missing data
+                    is_missing=True,  # Explicit flag
                     metadata={
                         "source": "clickhouse",
                         "host": self.host,
                         "database": self.database,
-                        "is_empty_result": True,
-                        "warning": "Query returned no rows - treated as zero",
+                        "reason": "empty_result",
+                        "warning": "Query returned no rows",
                     },
                 )
 
