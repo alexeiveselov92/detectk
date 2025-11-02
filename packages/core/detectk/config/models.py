@@ -38,11 +38,35 @@ DETECTOR_DEFAULTS: dict[str, dict[str, Any]] = {
 class CollectorConfig(BaseModel):
     """Configuration for data collector.
 
+    Supports three ways to configure collector:
+    1. Profile reference (recommended for reusable connections)
+    2. Minimal config with env var defaults
+    3. Full explicit configuration
+
     Attributes:
         type: Collector type (e.g., "clickhouse", "postgres", "http")
+              Optional if profile is specified
+        profile: Reference to connection profile (optional)
         params: Collector-specific parameters (connection, query, etc.)
 
-    Example:
+    Example 1 - Using profile (recommended):
+        ```yaml
+        collector:
+          profile: "clickhouse_analytics"  # References detectk_profiles.yaml
+          params:
+            query: "SELECT count() as value FROM events"
+        ```
+
+    Example 2 - Minimal (env var defaults):
+        ```yaml
+        collector:
+          type: "clickhouse"
+          params:
+            query: "SELECT count() as value FROM events"
+            # host/port/database automatically from $CLICKHOUSE_* env vars
+        ```
+
+    Example 3 - Full explicit:
         ```yaml
         collector:
           type: "clickhouse"
@@ -53,16 +77,24 @@ class CollectorConfig(BaseModel):
         ```
     """
 
-    type: str = Field(..., description="Collector type (must be registered)")
+    type: str | None = Field(default=None, description="Collector type (must be registered)")
+    profile: str | None = Field(default=None, description="Profile name from detectk_profiles.yaml")
     params: dict[str, Any] = Field(default_factory=dict, description="Collector-specific parameters")
+
+    @model_validator(mode="after")
+    def validate_type_or_profile(self) -> "CollectorConfig":
+        """Ensure either type or profile is specified."""
+        if not self.type and not self.profile:
+            raise ValueError("Either 'type' or 'profile' must be specified in collector config")
+        return self
 
     @field_validator("type")
     @classmethod
-    def validate_type_not_empty(cls, v: str) -> str:
-        """Ensure type is not empty."""
-        if not v or not v.strip():
+    def validate_type_not_empty(cls, v: str | None) -> str | None:
+        """Ensure type is not empty if provided."""
+        if v is not None and (not v or not v.strip()):
             raise ValueError("Collector type cannot be empty")
-        return v.strip()
+        return v.strip() if v else None
 
 
 class StorageConfig(BaseModel):

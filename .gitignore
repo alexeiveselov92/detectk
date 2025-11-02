@@ -206,3 +206,17 @@ logs/
 credentials.json
 *.key
 *.pem
+
+# ============================================================
+# DetectK Profiles (contain credentials)
+# ============================================================
+# Profile files with actual credentials (NOT in git)
+detectk_profiles.yaml
+.detectk/
+
+# Keep template file (in git)
+!detectk_profiles.yaml.template
+
+# DetectK Profiles (contain credentials)
+detectk_profiles.yaml
+.detectk/

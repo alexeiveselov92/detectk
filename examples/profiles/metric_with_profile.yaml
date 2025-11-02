@@ -1,0 +1,41 @@
+# Example: Using Connection Profile in Metric Config
+#
+# This metric uses a profile from detectk_profiles.yaml
+# instead of specifying connection params directly.
+#
+# Prerequisite: Create detectk_profiles.yaml with "clickhouse_analytics" profile
+
+name: "sessions_10min_with_profile"
+description: "Session monitoring using connection profile"
+
+# Collector using profile - SHORT and CLEAN!
+collector:
+  profile: "clickhouse_analytics"  # References profile from detectk_profiles.yaml
+  params:
+    query: |
+      SELECT count() as value
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+# Rest of config is unchanged
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+storage:
+  enabled: true
+  profile: "clickhouse_analytics"  # Can use same profile for storage!
+
+# Benefits of using profile:
+# 1. DRY - connection defined once in detectk_profiles.yaml
+# 2. Secure - credentials not in this file
+# 3. Flexible - change connection globally by editing profiles file
+# 4. Clean - metric config focuses on query, not connection details

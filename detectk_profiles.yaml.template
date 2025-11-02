@@ -1,0 +1,72 @@
+# DetectK Connection Profiles Template
+#
+# Copy this file to detectk_profiles.yaml and configure your connections.
+# Add detectk_profiles.yaml to .gitignore to keep credentials safe!
+#
+# File locations (in priority order):
+# 1. ./detectk_profiles.yaml (local - highest priority)
+# 2. ~/.detectk/profiles.yaml (global)
+#
+# Usage in metric configs:
+#   collector:
+#     profile: "clickhouse_analytics"  # Reference profile name
+#     params:
+#       query: "SELECT count() FROM sessions"
+
+profiles:
+  # Example: ClickHouse Analytics Database
+  clickhouse_analytics:
+    type: "clickhouse"
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+    # Optional: additional connection parameters
+    # timeout: 30
+    # retries: 3
+
+  # Example: ClickHouse Logs Database
+  clickhouse_logs:
+    type: "clickhouse"
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "logs"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+  # Example: PostgreSQL Production
+  postgres_production:
+    type: "postgres"
+    host: "${POSTGRES_HOST:-localhost}"
+    port: 5432
+    database: "production"
+    user: "${POSTGRES_USER:-postgres}"
+    password: "${POSTGRES_PASSWORD}"
+
+  # Example: PostgreSQL Staging
+  postgres_staging:
+    type: "postgres"
+    host: "${POSTGRES_STAGING_HOST:-localhost}"
+    port: 5432
+    database: "staging"
+    user: "${POSTGRES_USER:-postgres}"
+    password: "${POSTGRES_PASSWORD}"
+
+  # Example: Using connection string
+  postgres_from_dsn:
+    type: "postgres"
+    connection_string: "${DATABASE_URL}"
+
+# Security best practices:
+# 1. Add detectk_profiles.yaml to .gitignore
+# 2. Use environment variables for secrets (${VAR_NAME})
+# 3. Provide defaults for development (${VAR:-default})
+# 4. Keep this template file in git for documentation
+# 5. Never commit actual credentials!
+
+# Setup instructions:
+# 1. Copy this file: cp detectk_profiles.yaml.template detectk_profiles.yaml
+# 2. Edit detectk_profiles.yaml with your actual connections
+# 3. Set environment variables with secrets
+# 4. Verify profiles: dtk list-profiles (planned CLI command)

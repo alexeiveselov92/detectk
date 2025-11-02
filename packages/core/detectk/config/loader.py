@@ -14,6 +14,7 @@ import yaml
 from jinja2 import Environment, Template, TemplateError, StrictUndefined
 
 from detectk.config.models import MetricConfig
+from detectk.config.profiles import get_profile_loader, merge_profile_params
 from detectk.exceptions import ConfigurationError
 
 
@@ -119,6 +120,15 @@ class ConfigLoader:
         except Exception as e:
             raise ConfigurationError(
                 f"Failed to parse YAML: {e}",
+                config_path=str(config_path),
+            )
+
+        # Process profiles (if collector uses profile reference)
+        try:
+            config_dict = self._process_profiles(config_dict)
+        except Exception as e:
+            raise ConfigurationError(
+                f"Failed to process profiles: {e}",
                 config_path=str(config_path),
             )
 
@@ -299,3 +309,62 @@ class ConfigLoader:
             return data
         else:
             return data
+
+    def _process_profiles(self, config_dict: dict[str, Any]) -> dict[str, Any]:
+        """Process profile references in collector configuration.
+
+        If collector.profile is specified, merges profile params with explicit params.
+
+        Priority (highest to lowest):
+        1. Explicit params in config
+        2. Profile params
+        3. Environment variable defaults (handled by collector)
+
+        Args:
+            config_dict: Parsed configuration dictionary
+
+        Returns:
+            Configuration dict with profile params merged into collector.params
+
+        Raises:
+            ConfigurationError: If profile not found
+        """
+        if "collector" not in config_dict:
+            return config_dict
+
+        collector_config = config_dict["collector"]
+
+        # Check if profile is specified
+        profile_name = collector_config.get("profile")
+        if not profile_name:
+            return config_dict  # No profile, nothing to process
+
+        # Load profile
+        profile_loader = get_profile_loader()
+        profile_params = profile_loader.get_profile(profile_name)
+
+        # Extract type from profile if not specified in config
+        if "type" not in collector_config or not collector_config["type"]:
+            if "type" not in profile_params:
+                raise ConfigurationError(
+                    f"Profile '{profile_name}' must specify 'type' field",
+                    config_path="collector.profile",
+                )
+            collector_config["type"] = profile_params["type"]
+
+        # Get explicit params from config
+        explicit_params = collector_config.get("params", {})
+
+        # Merge: profile params + explicit params (explicit wins)
+        # Remove 'type' from profile_params before merging (it's not a connection param)
+        profile_connection_params = {k: v for k, v in profile_params.items() if k != "type"}
+
+        merged_params = merge_profile_params(
+            profile_params=profile_connection_params,
+            explicit_params=explicit_params,
+        )
+
+        # Update collector config with merged params
+        collector_config["params"] = merged_params
+
+        return config_dict

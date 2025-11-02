@@ -236,15 +236,42 @@ backtest:
 
 ## Project Status
 
-**Current Status:** 🚧 Active Development - Phase 1
+**Current Status:** ✅ MVP Complete - Phase 2 Done!
 
-We are currently implementing the core foundation:
-- Base classes and interfaces
-- Registry pattern for component discovery
-- Configuration parsing and validation
-- ClickHouse collector and storage
-- MAD detector
-- Mattermost alerter
+**Implemented (Ready to Use):**
+- ✅ Core foundation (base classes, registry, configuration)
+- ✅ ClickHouse collector and storage
+- ✅ Multi-detector architecture with auto-generated IDs
+- ✅ 3 detectors: Threshold, MAD, Z-Score
+- ✅ Mattermost alerter (radically simplified)
+- ✅ CLI tool (`dtk` command) with 6 commands
+- ✅ 87 tests passing
+- ✅ Comprehensive documentation and examples
+
+**CLI Commands Available:**
+```bash
+dtk init [path]          # Generate template configuration
+dtk run <config>         # Run metric check
+dtk validate <config>    # Validate configuration
+dtk list-collectors      # Show available collectors
+dtk list-detectors       # Show available detectors
+dtk list-alerters        # Show available alerters
+```
+
+**Quick Start:**
+```bash
+# Generate template
+dtk init my_metric.yaml -d mad
+
+# Edit configuration
+nano my_metric.yaml
+
+# Validate
+dtk validate my_metric.yaml
+
+# Run
+dtk run my_metric.yaml
+```
 
 **Next Steps:**
 - Complete Phase 1 (core foundation)

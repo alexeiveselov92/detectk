@@ -1,0 +1,37 @@
+# Example Connection Profiles
+#
+# This file shows various profile configurations for different databases.
+# Copy desired profiles to your detectk_profiles.yaml
+
+profiles:
+  # ClickHouse - Analytics Database
+  clickhouse_analytics:
+    type: "clickhouse"
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+  # ClickHouse - Logs Database
+  clickhouse_logs:
+    type: "clickhouse"
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "logs"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+  # PostgreSQL - Production
+  postgres_production:
+    type: "postgres"
+    host: "${POSTGRES_HOST:-localhost}"
+    port: 5432
+    database: "production"
+    user: "${POSTGRES_USER:-postgres}"
+    password: "${POSTGRES_PASSWORD}"
+
+  # PostgreSQL - Using connection string
+  postgres_from_url:
+    type: "postgres"
+    connection_string: "${DATABASE_URL}"
