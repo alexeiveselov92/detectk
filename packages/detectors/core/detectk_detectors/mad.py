@@ -150,7 +150,7 @@ class MADDetector(BaseDetector):
     def detect(
         self,
         metric_name: str,
-        value: float,
+        value: float | None,
         timestamp: datetime,
         **context: Any,
     ) -> DetectionResult:
@@ -158,16 +158,35 @@ class MADDetector(BaseDetector):
 
         Args:
             metric_name: Name of the metric
-            value: Current metric value
+            value: Current metric value (None if missing data)
             timestamp: Timestamp of measurement
-            **context: Additional context (may contain seasonal features)
+            **context: Additional context (may contain seasonal features, is_missing flag)
 
         Returns:
             DetectionResult with anomaly status, bounds, score
 
         Raises:
             DetectionError: If detection fails or insufficient data
+
+        Note:
+            If value is None or is_missing=True, returns non-anomalous result.
+            Use MissingDataDetector for explicit missing data detection.
         """
+        # Handle missing data - skip detection
+        if value is None or context.get("is_missing", False):
+            return DetectionResult(
+                metric_name=metric_name,
+                timestamp=timestamp,
+                value=value,
+                is_anomaly=False,
+                score=0.0,
+                metadata={
+                    "detector": "mad",
+                    "skipped": "missing_data",
+                    "reason": "Cannot perform MAD detection on missing data",
+                },
+            )
+
         if self.storage is None:
             raise DetectionError("MADDetector requires storage for historical data")
 

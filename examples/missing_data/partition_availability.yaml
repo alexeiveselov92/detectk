@@ -1,0 +1,63 @@
+# Example: Partition Availability Monitoring
+#
+# Use Case: Detect when ClickHouse partition is missing
+# Common scenarios:
+# - Distributed table partition not yet materialized
+# - Data not loaded for time range
+# - Partition dropped or corrupted
+
+name: "daily_partition_check"
+description: "Check that today's partition exists and has data"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "localhost"
+    port: 9000
+    database: "analytics"
+
+    # Check if today's partition has data
+    # If partition missing, query returns no rows
+    query: |
+      SELECT
+        countOrNull() as value
+      FROM events
+      WHERE toDate(timestamp) = today()
+
+# Detector: Missing data indicates partition issue
+detector:
+  type: "missing_data"
+  params:
+    # Alert immediately on first missing data point
+    consecutive_missing: 1
+
+    # Don't treat zero as missing - zero events might be valid
+    # (e.g., no activity at night)
+    treat_zero_as_missing: false
+
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_DATA_ENG_WEBHOOK}"
+    cooldown_minutes: 60
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "localhost"
+    port: 9000
+    database: "analytics"
+
+# Why countOrNull()?
+#
+# count() always returns a row (even if count=0)
+# countOrNull() returns NULL if partition doesn't exist
+#
+# Examples:
+# - Partition exists, no events → value=0 (not anomaly)
+# - Partition missing → value=NULL, is_missing=True (anomaly)
+# - Partition exists, has events → value=1234 (not anomaly)
+#
+# This allows distinguishing:
+# - "No events" (normal at night) from "No partition" (data issue)

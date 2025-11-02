@@ -1,0 +1,69 @@
+# Example: Heartbeat Monitoring with Missing Data Detection
+#
+# Use Case: Monitor that data stream is alive and fresh
+# Alerts when:
+# - Query returns no rows (missing data)
+# - Data becomes stale (too old)
+# - Consecutive missing points exceed threshold
+
+name: "etl_job_heartbeat"
+description: "Monitor ETL job completion - alert if no data for 15 minutes"
+
+# Collector: Check if ETL job produced data
+collector:
+  type: "clickhouse"
+  params:
+    host: "localhost"
+    port: 9000
+    database: "analytics"
+
+    # Query returns count of rows in last 10 minutes
+    # If ETL didn't run, this returns 0 or no rows
+    query: |
+      SELECT
+        count() as value,
+        max(created_at) as last_event_time
+      FROM etl_processed_data
+      WHERE created_at >= now() - INTERVAL 10 MINUTE
+
+# Detector: Missing Data Detection
+detector:
+  type: "missing_data"
+  params:
+    # Alert after 2 consecutive missing data points
+    # (e.g., 2 x 10 min = 20 minutes without data)
+    consecutive_missing: 2
+
+    # Also alert if data is stale (older than 15 minutes)
+    max_staleness_minutes: 15
+
+    # Treat count=0 as missing (ETL didn't produce data)
+    treat_zero_as_missing: true
+
+# Alerter: Notify on-call team
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_ONCALL_WEBHOOK}"
+    cooldown_minutes: 30  # Don't spam during outage
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "localhost"
+    port: 9000
+    database: "analytics"
+
+# How it works:
+#
+# 1. Every 10 minutes, collector queries for data
+# 2. If query returns no rows → is_missing=True
+# 3. MissingDataDetector tracks consecutive missing points
+# 4. After 2 consecutive missing (20 min) → alert sent
+# 5. Staleness check: if last_event_time > 15 min old → alert
+#
+# Benefits:
+# - Early detection of ETL failures
+# - Distinguish between "no data" (query issue) and "zero rows" (ETL issue)
+# - Staleness detection catches when data exists but is old

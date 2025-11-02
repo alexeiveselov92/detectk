@@ -207,7 +207,7 @@ class ThresholdDetector(BaseDetector):
     def detect(
         self,
         metric_name: str,
-        value: float,
+        value: float | None,
         timestamp: datetime,
         **context: Any,
     ) -> DetectionResult:
@@ -215,16 +215,35 @@ class ThresholdDetector(BaseDetector):
 
         Args:
             metric_name: Name of metric
-            value: Current metric value
+            value: Current metric value (None if missing data)
             timestamp: Timestamp of measurement
-            **context: Additional context (ignored)
+            **context: Additional context (may contain is_missing flag)
 
         Returns:
             DetectionResult with anomaly status
 
         Raises:
             DetectionError: If detection fails
+
+        Note:
+            If value is None or is_missing=True, returns non-anomalous result.
+            Use MissingDataDetector for explicit missing data detection.
         """
+        # Handle missing data - skip detection
+        if value is None or context.get("is_missing", False):
+            return DetectionResult(
+                metric_name=metric_name,
+                timestamp=timestamp,
+                value=value,
+                is_anomaly=False,
+                score=0.0,
+                metadata={
+                    "detector": "threshold",
+                    "skipped": "missing_data",
+                    "reason": "Cannot perform threshold detection on missing data",
+                },
+            )
+
         try:
             # Calculate comparison value (absolute or percentage)
             if self.percent:
