@@ -1,0 +1,61 @@
+# Example: MySQL Collector - Order Volume Monitoring
+#
+# Use Case: Monitor hourly order count for e-commerce platform
+# Database: MySQL 5.7+ or 8.0+
+#
+# Requirements:
+# - pip install detectk-collectors-sql[mysql]
+# - MySQL database with 'orders' table
+# - Environment variable: MYSQL_URL
+
+name: "hourly_orders_mysql"
+description: "Monitor order volume from MySQL e-commerce database"
+
+# Data Collection (MySQL)
+collector:
+  type: "sql"
+  params:
+    # MySQL connection string
+    # Format: mysql://[user[:password]@][host][:port][/database]
+    connection_string: "${MYSQL_URL}"
+
+    # MySQL-specific SQL syntax
+    query: |
+      SELECT
+        COUNT(*) as value,
+        NOW() as timestamp
+      FROM orders
+      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+        AND status IN ('pending', 'completed')
+
+    timeout: 30
+    pool_size: 10  # Higher pool for busy e-commerce DB
+
+# Anomaly Detection - Threshold (simple and fast)
+detector:
+  type: "threshold"
+  params:
+    operator: "less_than"
+    threshold: 50  # Alert if less than 50 orders per hour
+
+# Alerting
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 120  # 2 hours cooldown for order alerts
+
+# Storage (separate PostgreSQL for analytics)
+storage:
+  enabled: true
+  type: "sql"
+  params:
+    # Store metrics in separate analytics DB (PostgreSQL)
+    connection_string: "${ANALYTICS_DB_URL}"
+    save_detections: true  # Save detection results for analysis
+    datapoints_retention_days: 365  # Keep 1 year of order data
+
+# Environment Variables Required:
+# export MYSQL_URL="mysql://ecommerce_user:password@localhost:3306/ecommerce"
+# export ANALYTICS_DB_URL="postgresql://analytics_user:password@localhost:5432/metrics"
+# export MATTERMOST_WEBHOOK="https://mattermost.company.com/hooks/YOUR_WEBHOOK"

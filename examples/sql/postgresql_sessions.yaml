@@ -1,0 +1,68 @@
+# Example: PostgreSQL Collector - User Sessions Monitoring
+#
+# Use Case: Monitor active user sessions every 10 minutes
+# Database: PostgreSQL 9.6+
+#
+# Requirements:
+# - pip install detectk-collectors-sql[postgres]
+# - PostgreSQL database with 'sessions' table
+# - Environment variable: POSTGRES_URL
+
+name: "user_sessions_postgresql"
+description: "Monitor user sessions from PostgreSQL database"
+
+# Data Collection (PostgreSQL)
+collector:
+  type: "sql"
+  params:
+    # PostgreSQL connection string
+    # Format: postgresql://[user[:password]@][host][:port][/database]
+    connection_string: "${POSTGRES_URL}"
+
+    # PostgreSQL-specific SQL syntax
+    query: |
+      SELECT
+        COUNT(DISTINCT user_id) as value,
+        NOW() as timestamp
+      FROM sessions
+      WHERE created_at >= NOW() - INTERVAL '10 minutes'
+        AND status = 'active'
+
+    timeout: 30
+    pool_size: 5
+
+# Anomaly Detection - MAD with seasonal patterns
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+    exp_decay_factor: 0.1
+
+    # PostgreSQL seasonal features
+    seasonal_features:
+      - name: "hour_of_day"
+        expression: "EXTRACT(HOUR FROM NOW())"
+      - name: "day_of_week"
+        expression: "EXTRACT(DOW FROM NOW())"
+
+# Alerting
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 60
+
+# Storage (using same PostgreSQL database)
+storage:
+  enabled: true
+  type: "sql"
+  params:
+    connection_string: "${POSTGRES_URL}"
+    save_detections: false
+    datapoints_retention_days: 90
+
+# Environment Variables Required:
+# export POSTGRES_URL="postgresql://user:password@localhost:5432/analytics"
+# export SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"

@@ -1,0 +1,76 @@
+# Example: SQLite Collector - Local Metrics Monitoring
+#
+# Use Case: Monitor metrics from local SQLite database
+# Database: SQLite 3.x (built into Python)
+#
+# Requirements:
+# - pip install detectk-collectors-sql (no extra dependencies needed)
+# - SQLite database file
+#
+# Perfect for:
+# - Development/testing
+# - Small-scale monitoring
+# - Offline analytics
+# - IoT/edge devices
+
+name: "local_events_sqlite"
+description: "Monitor events from local SQLite database"
+
+# Data Collection (SQLite)
+collector:
+  type: "sql"
+  params:
+    # SQLite connection string
+    # Format: sqlite:///path/to/database.db
+    # Relative path: sqlite:///./data/metrics.db
+    # Absolute path: sqlite:////absolute/path/metrics.db
+    connection_string: "sqlite:///./metrics.db"
+
+    # SQLite-specific SQL syntax
+    query: |
+      SELECT
+        COUNT(*) as value,
+        datetime('now') as timestamp
+      FROM events
+      WHERE timestamp >= datetime('now', '-10 minutes')
+        AND event_type = 'user_action'
+
+    timeout: 10  # SQLite is fast, short timeout
+
+# Anomaly Detection - Z-Score (statistical)
+detector:
+  type: "zscore"
+  params:
+    window_size: "7 days"
+    n_sigma: 2.5  # More sensitive for local monitoring
+
+# Alerting - Slack
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 30
+
+# Storage - Same SQLite database
+storage:
+  enabled: true
+  type: "sql"
+  params:
+    # Use same SQLite file for storage (simple!)
+    connection_string: "sqlite:///./metrics.db"
+    save_detections: false  # Save space on local device
+    datapoints_retention_days: 30
+
+# Environment Variables (optional for SQLite):
+# export SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+
+# Note: SQLite is perfect for:
+# 1. Testing DetectK locally before deploying to production
+# 2. Small-scale monitoring (< 10k rows/day)
+# 3. Edge devices with limited resources
+# 4. Development environments
+
+# Limitations:
+# - No concurrent writes (single writer)
+# - No network access (file-based only)
+# - Limited to single server
