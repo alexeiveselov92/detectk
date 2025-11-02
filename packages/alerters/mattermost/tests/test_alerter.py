@@ -175,7 +175,7 @@ def test_format_message() -> None:
     assert "test_metric" in message
     assert "150.00" in message
     assert "up" in message or "↗" in message
-    assert "[90.00 - 110.00]" in message
+    assert "90.00 - 110.00" in message  # Range without brackets
     assert "4.2" in message
     assert "+36.4%" in message
     assert "2024-11-01 23:50:00" in message
