@@ -48,38 +48,73 @@ class CollectorConfig(BaseModel):
               Optional if profile is specified
         profile: Reference to connection profile (optional)
         params: Collector-specific parameters (connection, query, etc.)
+        timestamp_column: Name of timestamp column in query results (default: "period_time")
+        value_column: Name of value column in query results (default: "value")
+        context_columns: Optional list of context column names (seasonal features, metadata)
+
+    Query Requirements:
+        The query must use Jinja2 variables and return multiple rows:
+        - {{ period_start }} - Start of time period (required)
+        - {{ period_finish }} - End of time period (required)
+        - {{ interval }} - Time interval (e.g., "10 minutes")
+
+        Required columns in result:
+        - timestamp_column (e.g., "period_time") - Timestamp for each data point
+        - value_column (e.g., "value") - Metric value for each data point
+        - context_columns (optional) - Seasonal features like hour_of_day, day_of_week
 
     Example 1 - Using profile (recommended):
         ```yaml
         collector:
-          profile: "clickhouse_analytics"  # References detectk_profiles.yaml
+          profile: "clickhouse_analytics"
           params:
-            query: "SELECT count() as value FROM events"
+            query: |
+              SELECT
+                toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+                count() AS value,
+                toHour(period_time) AS hour_of_day
+              FROM events
+              WHERE timestamp >= toDateTime('{{ period_start }}')
+                AND timestamp < toDateTime('{{ period_finish }}')
+              GROUP BY period_time
+              ORDER BY period_time
+          timestamp_column: "period_time"
+          value_column: "value"
+          context_columns: ["hour_of_day"]
         ```
 
-    Example 2 - Minimal (env var defaults):
+    Example 2 - Minimal (defaults):
         ```yaml
         collector:
           type: "clickhouse"
           params:
-            query: "SELECT count() as value FROM events"
-            # host/port/database automatically from $CLICKHOUSE_* env vars
-        ```
-
-    Example 3 - Full explicit:
-        ```yaml
-        collector:
-          type: "clickhouse"
-          params:
-            host: "${CLICKHOUSE_HOST}"
-            database: "analytics"
-            query: "SELECT count() as value FROM events"
+            query: |
+              SELECT
+                period_time,
+                sessions_count as value
+              FROM ...
+          # timestamp_column defaults to "period_time"
+          # value_column defaults to "value"
         ```
     """
 
     type: str | None = Field(default=None, description="Collector type (must be registered)")
     profile: str | None = Field(default=None, description="Profile name from detectk_profiles.yaml")
     params: dict[str, Any] = Field(default_factory=dict, description="Collector-specific parameters")
+
+    # Column mapping for query results
+    timestamp_column: str = Field(
+        default="period_time",
+        description="Name of timestamp column in query results"
+    )
+    value_column: str = Field(
+        default="value",
+        description="Name of value column in query results"
+    )
+    context_columns: list[str] | None = Field(
+        default=None,
+        description="Optional list of context column names (seasonal features, metadata)"
+    )
 
     @model_validator(mode="after")
     def validate_type_or_profile(self) -> "CollectorConfig":
@@ -276,24 +311,38 @@ class AlerterConfig(BaseModel):
     """Configuration for alerter.
 
     Attributes:
+        enabled: Whether to send alerts (default: True)
+                Set to False for historical data loading without alerts
         type: Alerter type (e.g., "mattermost", "slack", "telegram")
         params: Alerter-specific parameters (webhook, channel, etc.)
         conditions: Alert decision conditions
 
-    Example:
+    Production Example:
         ```yaml
         alerter:
+          enabled: true  # Send alerts (default)
           type: "mattermost"
           params:
             webhook_url: "${MATTERMOST_WEBHOOK}"
-            channel: "#ops-alerts"
           conditions:
             consecutive_anomalies: 3
-            direction: "both"
             cooldown_minutes: 60
+        ```
+
+    Historical Load Example (no alerts):
+        ```yaml
+        alerter:
+          enabled: false  # Don't send alerts during historical load
+          type: "mattermost"
+          params:
+            webhook_url: "${MATTERMOST_WEBHOOK}"
         ```
     """
 
+    enabled: bool = Field(
+        default=True,
+        description="Whether to send alerts (False = detection only, no alerts)"
+    )
     type: str = Field(..., description="Alerter type (must be registered)")
     params: dict[str, Any] = Field(default_factory=dict, description="Alerter-specific parameters")
     conditions: dict[str, Any] = Field(
@@ -310,39 +359,61 @@ class AlerterConfig(BaseModel):
         return v.strip()
 
 
-class BacktestConfig(BaseModel):
-    """Configuration for backtesting.
+class ScheduleConfig(BaseModel):
+    """Configuration for scheduled metric checks.
+
+    For both production and historical data loading (what was called "backtesting").
 
     Attributes:
-        enabled: Whether backtesting is enabled
-        data_load_start: Start time for loading historical data
-        detection_start: Start time for running detection (after window)
-        detection_end: End time for detection
-        step_interval: Time step between checks
+        start_time: When to start checking (for historical: past date, for prod: now)
+        end_time: When to stop (optional, for continuous monitoring leave None)
+        interval: How often to check (e.g., "10 minutes")
+        batch_load_days: For initial load, how many days to load per batch (default: 30)
 
-    Example:
+    Production Example (continuous monitoring):
         ```yaml
-        backtest:
-          enabled: true
-          data_load_start: "2024-01-01"
-          detection_start: "2024-02-01"
-          detection_end: "2024-03-01"
-          step_interval: "10 minutes"
+        schedule:
+          interval: "10 minutes"
+          # No start_time/end_time - runs continuously from now
         ```
+
+    Historical Load Example (one-time backfill):
+        ```yaml
+        schedule:
+          start_time: "2024-01-01 00:00:00"  # Load from here
+          end_time: "2024-11-01 00:00:00"    # Load until here
+          interval: "10 minutes"
+          batch_load_days: 30                # Load in 30-day batches
+
+        alerter:
+          enabled: false  # Don't send alerts during historical load
+        ```
+
+    Process (same for both production and historical):
+        1. Check what's already in dtk_datapoints (checkpoint)
+        2. For each interval from start to end:
+           a. Collect: collector.collect_bulk(current - interval, current)
+           b. Save: storage.save_datapoints_bulk(points)
+           c. Detect: detector.detect(value, timestamp)
+           d. Alert: if alerter.enabled and is_anomaly → send alert
     """
 
-    enabled: bool = Field(default=False, description="Enable backtesting mode")
-    data_load_start: str | None = Field(default=None, description="Start time for data loading")
-    detection_start: str | None = Field(default=None, description="Start time for detection")
-    detection_end: str | None = Field(default=None, description="End time for detection")
-    step_interval: str | None = Field(default=None, description="Time step between checks")
-
-    @field_validator("data_load_start", "detection_start", "detection_end")
-    @classmethod
-    def validate_dates_if_enabled(cls, v: str | None, info) -> str | None:
-        """Validate required fields when backtesting is enabled."""
-        # Note: Full validation happens in ConfigLoader after all fields are parsed
-        return v
+    start_time: str | None = Field(
+        default=None,
+        description="Start time for checking (None = start from now)"
+    )
+    end_time: str | None = Field(
+        default=None,
+        description="End time for checking (None = run continuously)"
+    )
+    interval: str = Field(
+        default="10 minutes",
+        description="How often to check (e.g., '10 minutes', '1 hour')"
+    )
+    batch_load_days: int = Field(
+        default=30,
+        description="For initial loads, how many days to load per batch"
+    )
 
 
 class MetricConfig(BaseModel):
@@ -435,9 +506,9 @@ class MetricConfig(BaseModel):
         default_factory=StorageConfig,
         description="Metrics history storage configuration"
     )
-    backtest: BacktestConfig = Field(
-        default_factory=BacktestConfig,
-        description="Backtesting configuration"
+    schedule: ScheduleConfig | None = Field(
+        default=None,
+        description="Schedule configuration (for both production and historical loads)"
     )
 
     metadata: dict[str, Any] = Field(

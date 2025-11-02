@@ -6,6 +6,7 @@ from typing import Any
 
 from clickhouse_driver import Client
 from clickhouse_driver.errors import Error as ClickHouseError
+from jinja2 import Template, TemplateError
 
 from detectk.base import BaseCollector
 from detectk.models import DataPoint
@@ -19,8 +20,15 @@ logger = logging.getLogger(__name__)
 class ClickHouseCollector(BaseCollector):
     """Collector for ClickHouse database.
 
-    Executes SQL queries against ClickHouse and returns single data point.
+    Executes SQL queries against ClickHouse and returns time series data.
     Supports connection pooling, query templating, and error handling.
+
+    The query MUST use Jinja2 variables and return multiple rows:
+    - {{ period_start }} - Start of time period (required)
+    - {{ period_finish }} - End of time period (required)
+    - {{ interval }} - Time interval (e.g., "10 minutes")
+
+    Query MUST return columns specified in config (timestamp_column, value_column).
 
     Configuration:
         host: ClickHouse server host (default: localhost)
@@ -28,10 +36,12 @@ class ClickHouseCollector(BaseCollector):
         database: Database name (default: default)
         user: Username (optional)
         password: Password (optional)
-        query: SQL query that must return columns: value, timestamp
-               Query can use Jinja2 templates (rendered by ConfigLoader)
+        query: SQL query using {{ period_start }}, {{ period_finish }}, {{ interval }}
         timeout: Query timeout in seconds (default: 30)
         secure: Use SSL connection (default: False)
+        timestamp_column: Name of timestamp column in results (from CollectorConfig)
+        value_column: Name of value column in results (from CollectorConfig)
+        context_columns: List of context column names (from CollectorConfig)
 
     Example:
         >>> from detectk_clickhouse import ClickHouseCollector
@@ -42,15 +52,24 @@ class ClickHouseCollector(BaseCollector):
         ...     "database": "analytics",
         ...     "query": '''
         ...         SELECT
-        ...             count() as value,
-        ...             now() as timestamp
+        ...             toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+        ...             count() AS value
         ...         FROM events
-        ...         WHERE timestamp > now() - INTERVAL 10 MINUTE
-        ...     '''
+        ...         WHERE timestamp >= toDateTime('{{ period_start }}')
+        ...           AND timestamp < toDateTime('{{ period_finish }}')
+        ...         GROUP BY period_time
+        ...         ORDER BY period_time
+        ...     ''',
+        ...     "timestamp_column": "period_time",
+        ...     "value_column": "value",
         ... }
         >>> collector = ClickHouseCollector(config)
-        >>> datapoint = collector.collect()
-        >>> print(f"Value: {datapoint.value}")
+        >>> # Collect last 10 minutes
+        >>> points = collector.collect_bulk(
+        ...     period_start=datetime(2024, 11, 2, 14, 0),
+        ...     period_finish=datetime(2024, 11, 2, 14, 10),
+        ... )
+        >>> print(f"Collected {len(points)} points")
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -71,9 +90,15 @@ class ClickHouseCollector(BaseCollector):
         self.database = config.get("database", "default")
         self.user = config.get("user")
         self.password = config.get("password")
-        self.query = config["query"]
+        self.query_template = config["query"]  # Store as Jinja2 template
         self.timeout = config.get("timeout", 30)
         self.secure = config.get("secure", False)
+        self.interval = config.get("interval", "10 minutes")  # Default interval
+
+        # Column mapping
+        self.timestamp_column = config.get("timestamp_column", "period_time")
+        self.value_column = config.get("value_column", "value")
+        self.context_columns = config.get("context_columns")
 
         # Initialize ClickHouse client
         self.client: Client | None = None
@@ -99,6 +124,16 @@ class ClickHouseCollector(BaseCollector):
                 "ClickHouse collector query cannot be empty",
                 config_path="collector.params.query",
             )
+
+        # Check for required Jinja2 variables
+        required_vars = ["period_start", "period_finish"]
+        for var in required_vars:
+            if f"{{{{ {var} }}}}" not in query and f"{{{{{var}}}}}" not in query:
+                raise ConfigurationError(
+                    f"ClickHouse query must use Jinja2 variable {{{{ {var} }}}}\n"
+                    f"Example: WHERE timestamp >= toDateTime('{{{{ {var} }}}}')",
+                    config_path="collector.params.query",
+                )
 
     def _get_client(self) -> Client:
         """Get or create ClickHouse client.
@@ -129,109 +164,153 @@ class ClickHouseCollector(BaseCollector):
                 )
         return self.client
 
-    def collect(self, at_time: datetime | None = None) -> DataPoint:
-        """Collect current metric value from ClickHouse.
+    def collect_bulk(
+        self,
+        period_start: datetime,
+        period_finish: datetime,
+    ) -> list[DataPoint]:
+        """Collect time series data for a period from ClickHouse.
 
-        Executes the configured query and returns a single data point.
-        Query must return columns: value (required), timestamp (optional).
+        This method works for ANY time range:
+        - Real-time: 10 minutes → 1 point
+        - Bulk load: 30 days → 4,464 points (for 10-min intervals)
+
+        The query is executed with period_start and period_finish variables.
+        Query must return rows with columns: timestamp_column, value_column, context_columns.
 
         Args:
-            at_time: Time to collect for (for backtesting support)
-                    Note: at_time should be used in query template,
-                    not passed to ClickHouse directly
+            period_start: Start of time period (inclusive)
+            period_finish: End of time period (exclusive)
 
         Returns:
-            DataPoint with timestamp and value
+            List of DataPoints with timestamps, values, and optional context.
+            Can be empty if no data in period.
 
         Raises:
             CollectionError: If query fails or returns invalid data
 
         Example Query:
             SELECT
-                count() as value,
-                now() as timestamp
+                toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+                count() AS value,
+                toHour(period_time) AS hour_of_day
             FROM events
-            WHERE timestamp > now() - INTERVAL 10 MINUTE
+            WHERE timestamp >= toDateTime('{{ period_start }}')
+              AND timestamp < toDateTime('{{ period_finish }}')
+            GROUP BY period_time
+            ORDER BY period_time
 
-        Note on Empty Results:
-            If query returns no rows, returns DataPoint with value=None
-            and is_missing=True flag.
-            This allows explicit missing data detection.
+        Note: Query template is stored in self.query_template with Jinja2 variables.
+        This method renders it with period_start/period_finish for each call.
         """
-        at_time = at_time or datetime.now()
-
         try:
             client = self._get_client()
 
-            # Execute query
-            logger.debug(f"Executing ClickHouse query: {self.query[:100]}...")
-            result = client.execute(self.query)
-
-            # Handle empty result (no rows returned)
-            # This can happen if:
-            # - No events in time window (e.g., no sessions at night)
-            # - Missing data partition
-            # - Query filtered out all rows
-            if not result:
-                logger.warning(
-                    "ClickHouse query returned no rows. "
-                    "Returning DataPoint with is_missing=True. "
-                    "Consider using aggregate functions (e.g., count()) that always return a row."
+            # Render query template with period_start, period_finish, interval
+            try:
+                template = Template(self.query_template)
+                rendered_query = template.render(
+                    period_start=period_start.isoformat(),
+                    period_finish=period_finish.isoformat(),
+                    interval=self.interval,
                 )
-                return DataPoint(
-                    timestamp=at_time,
-                    value=None,  # Explicit None for missing data
-                    is_missing=True,  # Explicit flag
-                    metadata={
-                        "source": "clickhouse",
-                        "host": self.host,
-                        "database": self.database,
-                        "reason": "empty_result",
-                        "warning": "Query returned no rows",
-                    },
-                )
-
-            row = result[0]
-            if not row:
+            except TemplateError as e:
                 raise CollectionError(
-                    "ClickHouse query returned empty row",
+                    f"Failed to render query template: {e}\n"
+                    f"Query template: {self.query_template[:200]}...",
                     source="clickhouse",
                 )
 
-            # Extract value and timestamp
-            # Expected format: (value, timestamp) or just (value,)
-            if len(row) < 1:
-                raise CollectionError(
-                    "ClickHouse query must return at least 'value' column",
-                    source="clickhouse",
-                )
-
-            value = float(row[0])
-
-            # Use returned timestamp if available, otherwise use at_time
-            if len(row) >= 2 and row[1]:
-                timestamp = row[1]
-                if not isinstance(timestamp, datetime):
-                    # Try to parse if it's a string
-                    try:
-                        timestamp = datetime.fromisoformat(str(timestamp))
-                    except Exception:
-                        timestamp = at_time
-            else:
-                timestamp = at_time
-
-            logger.debug(f"Collected value: {value} at {timestamp}")
-
-            return DataPoint(
-                timestamp=timestamp,
-                value=value,
-                metadata={"source": "clickhouse", "host": self.host, "database": self.database},
+            # Execute rendered query
+            logger.debug(
+                f"Executing ClickHouse query for period {period_start} to {period_finish}"
             )
+            logger.debug(f"Rendered query: {rendered_query[:200]}...")
+            result = client.execute(rendered_query)
+
+            # Handle empty result (no data in period)
+            if not result:
+                logger.info(
+                    f"ClickHouse query returned no rows for period "
+                    f"{period_start} to {period_finish}. "
+                    f"This is normal if no data exists in this time range."
+                )
+                return []
+
+            # Parse result rows into DataPoints
+            datapoints = []
+            for row_num, row in enumerate(result):
+                try:
+                    # Extract timestamp
+                    timestamp_value = row[0] if isinstance(row, (list, tuple)) else row.get(self.timestamp_column)
+                    if not timestamp_value:
+                        logger.warning(
+                            f"Row {row_num} missing timestamp column '{self.timestamp_column}', skipping"
+                        )
+                        continue
+
+                    if not isinstance(timestamp_value, datetime):
+                        try:
+                            timestamp = datetime.fromisoformat(str(timestamp_value))
+                        except Exception:
+                            logger.warning(
+                                f"Row {row_num} has invalid timestamp format: {timestamp_value}, skipping"
+                            )
+                            continue
+                    else:
+                        timestamp = timestamp_value
+
+                    # Extract value
+                    value_raw = row[1] if isinstance(row, (list, tuple)) else row.get(self.value_column)
+                    if value_raw is None:
+                        # Allow NULL values (missing data)
+                        value = None
+                    else:
+                        try:
+                            value = float(value_raw)
+                        except (TypeError, ValueError):
+                            logger.warning(
+                                f"Row {row_num} has non-numeric value: {value_raw}, skipping"
+                            )
+                            continue
+
+                    # Extract context (if configured)
+                    context = None
+                    if self.context_columns and isinstance(row, dict):
+                        context = {col: row.get(col) for col in self.context_columns if col in row}
+
+                    # Create DataPoint
+                    datapoint = DataPoint(
+                        timestamp=timestamp,
+                        value=value,
+                        is_missing=(value is None),
+                        metadata=context or {
+                            "source": "clickhouse",
+                            "host": self.host,
+                            "database": self.database,
+                        },
+                    )
+                    datapoints.append(datapoint)
+
+                except Exception as e:
+                    logger.warning(f"Error parsing row {row_num}: {e}, skipping row")
+                    continue
+
+            logger.debug(
+                f"Collected {len(datapoints)} datapoints for period "
+                f"{period_start} to {period_finish}"
+            )
+
+            return datapoints
 
         except ClickHouseError as e:
             raise CollectionError(
                 f"ClickHouse query failed: {e}",
                 source="clickhouse",
+                details={
+                    "period_start": str(period_start),
+                    "period_finish": str(period_finish),
+                },
             )
         except CollectionError:
             raise
@@ -239,6 +318,10 @@ class ClickHouseCollector(BaseCollector):
             raise CollectionError(
                 f"Unexpected error during ClickHouse collection: {e}",
                 source="clickhouse",
+                details={
+                    "period_start": str(period_start),
+                    "period_finish": str(period_finish),
+                },
             )
 
     def close(self) -> None:

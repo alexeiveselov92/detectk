@@ -65,29 +65,79 @@ class BaseStorage(ABC):
     # ========================================================================
 
     @abstractmethod
-    def save_datapoint(self, metric_name: str, datapoint: DataPoint) -> None:
-        """Save collected metric value to dtk_datapoints table.
+    def save_datapoints_bulk(
+        self,
+        metric_name: str,
+        datapoints: list[DataPoint],
+    ) -> None:
+        """Bulk insert collected metric values to dtk_datapoints table.
+
+        This method works for ANY number of datapoints:
+        - Single point: [DataPoint(...)] - for real-time collection
+        - Multiple points: [DataPoint(...), ...] - for bulk loading
 
         This method should:
         1. Connect to storage (use connection pooling)
-        2. Insert datapoint into dtk_datapoints table
+        2. Bulk insert all datapoints into dtk_datapoints table (efficient batch insert)
         3. Handle errors gracefully (retry if transient)
 
         Args:
             metric_name: Name of metric (indexed for fast queries)
-            datapoint: Data point with timestamp, value, and optional context
+            datapoints: List of data points with timestamps, values, and optional context
 
         Raises:
             StorageError: If save operation fails
 
         Example:
             >>> storage = ClickHouseStorage(config)
-            >>> point = DataPoint(
-            ...     timestamp=datetime.now(),
+            >>>
+            >>> # Real-time: save single point
+            >>> points = [DataPoint(
+            ...     timestamp=datetime(2024, 11, 2, 14, 10),
             ...     value=1234.5,
             ...     metadata={"hour_of_day": 14, "day_of_week": "monday"}
+            ... )]
+            >>> storage.save_datapoints_bulk("sessions_10min", points)
+            >>>
+            >>> # Bulk load: save 4,464 points
+            >>> points = collector.collect_bulk(
+            ...     period_start=datetime(2024, 1, 1),
+            ...     period_finish=datetime(2024, 1, 31),
             ... )
-            >>> storage.save_datapoint("sessions_10min", point)
+            >>> storage.save_datapoints_bulk("sessions_10min", points)
+            >>> # Inserts all 4,464 rows in one efficient batch operation
+        """
+        pass
+
+    @abstractmethod
+    def get_last_loaded_timestamp(self, metric_name: str) -> datetime | None:
+        """Get timestamp of last loaded datapoint for checkpoint system.
+
+        This method queries MAX(collected_at) from dtk_datapoints table.
+        Used for:
+        - Resuming interrupted bulk loads
+        - Checking what data is already present
+        - Avoiding duplicate inserts
+
+        Args:
+            metric_name: Name of metric to check
+
+        Returns:
+            Timestamp of last loaded datapoint, or None if no data
+
+        Raises:
+            StorageError: If query fails
+
+        Example:
+            >>> storage = ClickHouseStorage(config)
+            >>> last = storage.get_last_loaded_timestamp("sessions_10min")
+            >>> if last:
+            ...     print(f"Last loaded: {last}")
+            ...     # Resume from last + interval
+            ...     start = last + timedelta(minutes=10)
+            ... else:
+            ...     print("No data loaded yet")
+            ...     start = config.backtest.data_load_start
         """
         pass
 

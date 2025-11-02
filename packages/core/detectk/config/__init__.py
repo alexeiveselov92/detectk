@@ -10,7 +10,7 @@ from detectk.config.models import (
     DetectorConfig,
     AlerterConfig,
     StorageConfig,
-    BacktestConfig,
+    ScheduleConfig,
 )
 from detectk.config.loader import ConfigLoader
 
@@ -20,6 +20,6 @@ __all__ = [
     "DetectorConfig",
     "AlerterConfig",
     "StorageConfig",
-    "BacktestConfig",
+    "ScheduleConfig",
     "ConfigLoader",
 ]
