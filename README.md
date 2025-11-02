@@ -14,14 +14,16 @@
 ### Key Features
 
 - **Configuration-Driven**: Define metrics, detectors, and alerts in YAML files
+- **Time Series First**: Analyst writes ONE query with variables - system handles everything
 - **Modular Architecture**: Install only the components you need
 - **Orchestrator-Agnostic**: Works standalone or with Prefect, Airflow, or any workflow engine
 - **Flexible Time Intervals**: No hardcoded assumptions - works with any interval from seconds to months
 - **Multiple Databases**: ClickHouse, PostgreSQL, MySQL, SQLite, and more
-- **Advanced Detection**: Threshold, statistical (MAD, Z-score, IQR), seasonal patterns, and ML-based detectors
+- **Advanced Detection**: Threshold, statistical (MAD, Z-score), seasonal patterns, and ML-based detectors
 - **Multiple Alert Channels**: Mattermost, Slack, Telegram, Email
-- **Backtesting**: Test metrics on historical data before deploying to production
-- **Production-Ready**: Proper error handling, structured logging, retries, and observability
+- **Bulk Loading**: Efficiently load historical data for detector training
+- **Checkpoint System**: Resume interrupted loads automatically
+- **Production-Ready**: Proper error handling, structured logging, and observability
 
 ---
 
@@ -48,19 +50,34 @@ Create `configs/sessions_10min.yaml`:
 name: "sessions_10min"
 description: "Monitor user sessions every 10 minutes"
 
-# Data collection
+# Data collection - returns TIME SERIES (multiple rows)
 collector:
   type: "clickhouse"
   params:
     host: "${CLICKHOUSE_HOST}"
     database: "analytics"
+    # IMPORTANT: Query returns multiple rows with timestamps!
     query: |
       SELECT
-        toStartOfInterval(timestamp, INTERVAL 10 MINUTE) as timestamp,
-        count(DISTINCT user_id) as value
+        toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+        count(DISTINCT user_id) AS value,
+        toHour(period_time) AS hour_of_day  -- optional context
       FROM sessions
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
-        AND timestamp < now()
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
+    # Column mapping (flexible naming)
+    timestamp_column: "period_time"
+    value_column: "value"
+    context_columns: ["hour_of_day"]
+
+# Storage for historical window (required for detection)
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    connection_string: "${METRICS_DB_URL}"
 
 # Anomaly detection
 detector:
@@ -68,38 +85,56 @@ detector:
   params:
     window_size: "30 days"
     n_sigma: 3.0
-    seasonal_features:
-      - name: "hour_of_day"
-        expression: "toHour(timestamp)"
-      - name: "day_of_week"
-        expression: "toDayOfWeek(timestamp)"
 
 # Alert delivery
 alerter:
+  enabled: true  # Set to false for historical loads
   type: "mattermost"
   params:
     webhook_url: "${MATTERMOST_WEBHOOK}"
     channel: "#ops-alerts"
-  conditions:
-    consecutive_anomalies: 3
-    direction: "both"
-    cooldown_minutes: 60
+
+# Scheduling
+schedule:
+  interval: "10 minutes"  # Continuous monitoring
 ```
 
 ### Run Metric Check
 
 ```bash
-# Run once
+# Run once (typically called by cron/Prefect every 10 min)
 dtk run configs/sessions_10min.yaml
 
 # Run all metrics in directory
 dtk run configs/
 
-# Run with backtesting
-dtk backtest configs/sessions_10min.yaml \
-  --start 2024-01-01 \
-  --end 2024-02-01 \
-  --step "10 minutes"
+# Validate configuration
+dtk validate configs/sessions_10min.yaml
+```
+
+### Load Historical Data
+
+For initial setup or detector training, load historical data:
+
+```yaml
+# configs/sessions_10min_historical.yaml
+name: "sessions_10min"
+
+# ... same collector, detector config ...
+
+schedule:
+  start_time: "2024-01-01"   # Load from here
+  end_time: "2024-11-01"     # Load until here
+  interval: "10 minutes"
+  batch_load_days: 30        # Load in 30-day batches
+
+alerter:
+  enabled: false  # NO alerts during historical load
+```
+
+Then run:
+```bash
+dtk load-history configs/sessions_10min_historical.yaml
 ```
 
 ---
@@ -118,24 +153,75 @@ DetectK uses a three-stage pipeline:
        │                     │                      │
        ▼                     ▼                      ▼
   ┌─────────────────────────────────────────────────────┐
-  │              Optional Storage                       │
-  │  - metrics_history (for historical windows)         │
-  │  - detection_results (for dashboards/analysis)      │
+  │              dtk_datapoints & dtk_detections        │
+  │  - Time series data storage (ReplacingMergeTree)    │
+  │  - Checkpoint system for resumable loads            │
   └─────────────────────────────────────────────────────┘
 ```
 
 **Stage 1: Collection**
-- Query source database for current value (1 row - lightweight)
-- Optionally save to `metrics_history` table
+- Query source database for TIME SERIES (multiple rows with timestamps)
+- Bulk insert to `dtk_datapoints` table (efficient batch operation)
+- Works for any time range: 10 minutes → 1 point, or 30 days → 4,464 points
 
 **Stage 2: Detection**
-- Read historical window from storage (e.g., 30 days)
-- Apply detection algorithm with seasonal features
+- Read historical window from storage (e.g., 30 days of data)
+- Apply detection algorithm with optional seasonal features
 - Return anomaly status and bounds
 
 **Stage 3: Alert Decision**
-- Check alert conditions (consecutive anomalies, direction, cooldown)
-- Send alert if conditions met
+- Check if alerting is enabled (`alerter.enabled`)
+- Send alert if anomaly detected
+
+**Key Insight: No Separate "Backtesting"**
+
+Historical data loading = production monitoring with `alerter.enabled = false`
+
+Same code, same pipeline, just different config flag!
+
+---
+
+## Time Series Architecture (CRITICAL!)
+
+DetectK uses a time series architecture where analyst writes ONE query:
+
+### Query Pattern
+
+```sql
+SELECT
+    toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+    count() AS value
+FROM events
+WHERE timestamp >= toDateTime('{{ period_start }}')  -- ← Variables!
+  AND timestamp < toDateTime('{{ period_finish }}')  -- ← Variables!
+GROUP BY period_time
+ORDER BY period_time
+```
+
+### How It Works
+
+1. **Analyst writes query ONCE** with `{{ period_start }}`, `{{ period_finish }}` variables
+2. **Collector stores query as template** (not rendered at config load time)
+3. **Collector renders query on EACH call** with different time ranges:
+   - Real-time: `collect_bulk(now-10min, now)` → 1 point
+   - Bulk load: `collect_bulk(2024-01-01, 2024-01-31)` → 4,464 points
+4. **Same query works for everything!**
+
+### Flexible Column Naming
+
+Analyst can name columns however they want:
+
+```yaml
+collector:
+  params:
+    query: |
+      SELECT
+        my_timestamp AS ts,      # Any name!
+        my_value AS metric_val   # Any name!
+      FROM ...
+    timestamp_column: "ts"         # Tell DetectK which column is timestamp
+    value_column: "metric_val"     # Tell DetectK which column is value
+```
 
 ---
 
@@ -145,34 +231,26 @@ DetectK uses a three-stage pipeline:
 
 | Package | Databases | Status |
 |---------|-----------|--------|
-| `detectk-collectors-clickhouse` | ClickHouse | 🚧 In Development |
-| `detectk-collectors-sql` | PostgreSQL, MySQL, SQLite | 📋 Planned |
+| `detectk-collectors-clickhouse` | ClickHouse | ✅ Complete |
+| `detectk-collectors-sql` | PostgreSQL, MySQL, SQLite | ✅ Complete |
 | `detectk-collectors-http` | REST APIs | 📋 Planned |
 
 ### Detectors (Anomaly Detection)
 
 | Package | Algorithms | Status |
 |---------|------------|--------|
-| `detectk-detectors` | Threshold, Z-score, MAD, IQR | 🚧 In Development |
-| `detectk-detectors-timeseries` | Prophet, SARIMA, Exponential Smoothing | 📋 Planned |
-| `detectk-detectors-ml` | Isolation Forest, Autoencoder, LSTM | 📋 Planned |
+| `detectk-detectors` | Threshold, Z-score, MAD | ✅ Complete |
+| `detectk-detectors-timeseries` | Prophet, SARIMA | 📋 Planned |
+| `detectk-detectors-ml` | Isolation Forest, Autoencoder | 📋 Planned |
 
 ### Alerters (Notification Channels)
 
 | Package | Channels | Status |
 |---------|----------|--------|
-| `detectk-alerters-mattermost` | Mattermost | 🚧 In Development |
-| `detectk-alerters-slack` | Slack | 📋 Planned |
+| `detectk-alerters-mattermost` | Mattermost | ✅ Complete |
+| `detectk-alerters-slack` | Slack | ✅ Complete |
 | `detectk-alerters-telegram` | Telegram | 📋 Planned |
 | `detectk-alerters-email` | Email (SMTP) | 📋 Planned |
-
-### Orchestrators
-
-| Package | Integration | Status |
-|---------|-------------|--------|
-| `detectk-standalone` | APScheduler (built-in) | 📋 Planned |
-| `detectk-prefect` | Prefect 2.x | 📋 Planned |
-| `detectk-airflow` | Apache Airflow | 📋 Planned |
 
 ---
 
@@ -206,46 +284,44 @@ detector:
 
 ### Seasonal Pattern Detection
 
-Account for time-of-day and day-of-week patterns:
+Account for time-of-day and day-of-week patterns via context columns:
 
 ```yaml
+collector:
+  params:
+    query: |
+      SELECT
+        period_time,
+        value,
+        toHour(period_time) AS hour_of_day,
+        toDayOfWeek(period_time) AS day_of_week
+      FROM ...
+    context_columns: ["hour_of_day", "day_of_week"]
+
 detector:
   type: "mad"
   params:
-    seasonal_features:
-      - name: "hour_of_day"
-        expression: "toHour(timestamp)"
-      - name: "day_of_week"
-        expression: "toDayOfWeek(timestamp)"
-    use_combined_seasonality: true
-```
-
-### Backtesting
-
-Test detector on historical data:
-
-```yaml
-backtest:
-  enabled: true
-  data_load_start: "2024-01-01"
-  detection_start: "2024-02-01"  # After 30-day window
-  step_interval: "10 minutes"
+    window_size: "30 days"
+    # Detector can use context for seasonal adjustment
 ```
 
 ---
 
 ## Project Status
 
-**Current Status:** ✅ MVP Complete - Phase 2 Done!
+**Current Status:** ✅ Phase 3 Complete - Time Series Architecture Refactored!
 
 **Implemented (Ready to Use):**
 - ✅ Core foundation (base classes, registry, configuration)
-- ✅ ClickHouse collector and storage
+- ✅ Time series architecture with `collect_bulk()`
+- ✅ ClickHouse collector and storage (with ReplacingMergeTree)
+- ✅ Generic SQL collector (PostgreSQL, MySQL, SQLite)
 - ✅ Multi-detector architecture with auto-generated IDs
-- ✅ 3 detectors: Threshold, MAD, Z-Score
-- ✅ Mattermost alerter (radically simplified)
-- ✅ CLI tool (`dtk` command) with 6 commands
-- ✅ 87 tests passing
+- ✅ Detectors: Threshold, MAD, Z-Score, Missing Data
+- ✅ Alerters: Mattermost, Slack
+- ✅ Checkpoint system for resumable loads
+- ✅ CLI tool (`dtk` command)
+- ✅ 112+ tests passing
 - ✅ Comprehensive documentation and examples
 
 **CLI Commands Available:**
@@ -256,29 +332,36 @@ dtk validate <config>    # Validate configuration
 dtk list-collectors      # Show available collectors
 dtk list-detectors       # Show available detectors
 dtk list-alerters        # Show available alerters
+dtk list-metrics [dir]   # List all metrics in directory
+dtk init-project [dir]   # Initialize project structure
 ```
 
 **Quick Start:**
 ```bash
-# Generate template
-dtk init my_metric.yaml -d mad
+# Initialize project
+dtk init-project my-metrics --minimal
+
+cd my-metrics/
+
+# Generate metric template
+dtk init metrics/sessions.yaml -d mad
 
 # Edit configuration
-nano my_metric.yaml
+nano metrics/sessions.yaml
 
 # Validate
-dtk validate my_metric.yaml
+dtk validate metrics/sessions.yaml
 
 # Run
-dtk run my_metric.yaml
+dtk run metrics/sessions.yaml
 ```
 
-**Next Steps:**
-- Complete Phase 1 (core foundation)
-- Add more detectors (Z-score, IQR)
-- Add more collectors (PostgreSQL, MySQL)
-- CLI tools
-- Documentation and examples
+**Next Steps (Phase 4):**
+- `dtk load-history` command for bulk loading
+- Prophet time-series detector
+- IQR detector
+- Telegram and Email alerters
+- Documentation site
 
 See [TODO.md](TODO.md) for detailed roadmap (internal).
 
@@ -287,16 +370,17 @@ See [TODO.md](TODO.md) for detailed roadmap (internal).
 ## Documentation
 
 - **Quick Start** (this README)
-- **Architecture Guide** - Design decisions and extension points (internal)
-- **Configuration Reference** - Complete YAML schema documentation (coming soon)
+- **[DECISIONS.md](DECISIONS.md)** - Architectural decisions with rationale
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development standards and guidelines
+- **Architecture Guide** - Design details (internal: ARCHITECTURE.md)
+- **Configuration Reference** - Complete YAML schema (coming soon)
 - **API Documentation** - Auto-generated from docstrings (coming soon)
-- **Examples** - Working examples for common use cases (coming soon)
 
 ---
 
 ## Contributing
 
-This project is currently in active development. Contributions are welcome once we reach MVP status.
+This project is in active development. See [CONTRIBUTING.md](CONTRIBUTING.md) for development standards.
 
 ---
 
@@ -323,4 +407,4 @@ Developed with lessons learned from production monitoring systems and inspired b
 
 ---
 
-**Built with by data engineers, for data analysts.**
+**Built by data engineers, for data analysts.**

@@ -88,12 +88,20 @@ mypy packages/core/detectk
 
 ```python
 # ✅ Good - modern union syntax
-def collect(self, at_time: datetime | None = None) -> DataPoint:
+def collect_bulk(
+    self,
+    period_start: datetime,
+    period_finish: datetime,
+) -> list[DataPoint]:
     pass
 
 # ❌ Bad - old Optional syntax
-from typing import Optional
-def collect(self, at_time: Optional[datetime] = None) -> DataPoint:
+from typing import Optional, List
+def collect_bulk(
+    self,
+    period_start: datetime,
+    period_finish: datetime,
+) -> List[DataPoint]:
     pass
 
 # ✅ Good - modern list/dict syntax
@@ -111,24 +119,40 @@ def process(self, items: List[str], mapping: Dict[str, int]) -> Tuple[int, int]:
 Use Google-style docstrings for all public classes and methods:
 
 ```python
-def collect(self, at_time: datetime | None = None) -> DataPoint:
-    """Collect current metric value from source.
+def collect_bulk(
+    self,
+    period_start: datetime,
+    period_finish: datetime,
+) -> list[DataPoint]:
+    """Collect time series data for specified period.
 
     Args:
-        at_time: Time to collect for (default: now()).
-                Used for backtesting and scheduled runs.
+        period_start: Start of time range to collect
+        period_finish: End of time range to collect
 
     Returns:
-        DataPoint with timestamp and value
+        List of DataPoints with timestamps and values.
+        Can return 1 point (real-time) or thousands (bulk load).
 
     Raises:
         CollectionError: If collection fails
 
     Example:
         >>> collector = ClickHouseCollector(config)
-        >>> point = collector.collect()
-        >>> print(point.value)
-        1234.5
+        >>> # Real-time: 10 minutes
+        >>> points = collector.collect_bulk(
+        ...     period_start=datetime(2024, 11, 2, 14, 0),
+        ...     period_finish=datetime(2024, 11, 2, 14, 10),
+        ... )
+        >>> len(points)
+        1
+        >>> # Bulk load: 30 days
+        >>> points = collector.collect_bulk(
+        ...     period_start=datetime(2024, 1, 1),
+        ...     period_finish=datetime(2024, 1, 31),
+        ... )
+        >>> len(points)
+        4464
     """
 ```
 
@@ -139,8 +163,8 @@ def collect(self, at_time: datetime | None = None) -> DataPoint:
 ```python
 # ✅ Good - self-documenting
 class BaseCollector:
-    def collect(self, at_time) -> DataPoint:
-        """Collect data from source."""
+    def collect_bulk(self, period_start, period_finish) -> list[DataPoint]:
+        """Collect time series data from source."""
 
 class BaseDetector:
     def detect(self, metric_name, value, timestamp) -> DetectionResult:
@@ -163,7 +187,7 @@ class BaseCollector:
 ```
 
 **Consistent parameter naming:**
-- Use `at_time` everywhere (NOT `execution_time`, `check_time`, `run_time`)
+- Use `period_start`, `period_finish` for time ranges (NOT `start_time`, `end_time`)
 - Use `metric_name` (NOT `name`, `metric`, `metric_id`)
 - Use `config` for configuration dictionaries
 - Use `params` for detector/alerter parameters
@@ -236,31 +260,47 @@ logger.info(f"Password: {password}")  # Never log credentials
 class TestClickHouseCollector:
     """Test suite for ClickHouse collector."""
 
-    def test_collect_success(self):
-        """Test successful data collection."""
+    def test_collect_bulk_success(self):
+        """Test successful bulk data collection."""
         # Arrange
-        config = {"query": "SELECT 1", "host": "localhost"}
+        config = {
+            "query": "SELECT timestamp, value FROM ...",
+            "host": "localhost",
+            "timestamp_column": "timestamp",
+            "value_column": "value",
+        }
         collector = ClickHouseCollector(config)
 
         # Act
-        result = collector.collect()
+        points = collector.collect_bulk(
+            period_start=datetime(2024, 1, 1),
+            period_finish=datetime(2024, 1, 2),
+        )
 
         # Assert
-        assert result.value == 1
-        assert result.is_missing is False
+        assert len(points) > 0
+        assert all(isinstance(p, DataPoint) for p in points)
 
-    def test_collect_connection_error(self):
+    def test_collect_bulk_connection_error(self):
         """Test handling of connection errors."""
-        config = {"query": "SELECT 1", "host": "invalid-host"}
+        config = {
+            "query": "SELECT 1",
+            "host": "invalid-host",
+            "timestamp_column": "ts",
+            "value_column": "val",
+        }
         collector = ClickHouseCollector(config)
 
         with pytest.raises(CollectionError, match="Failed to connect"):
-            collector.collect()
+            collector.collect_bulk(
+                period_start=datetime(2024, 1, 1),
+                period_finish=datetime(2024, 1, 2),
+            )
 ```
 
 **Test naming:**
 - Class: `Test<ComponentName>` (e.g., `TestClickHouseCollector`)
-- Method: `test_<what>_<condition>` (e.g., `test_collect_connection_error`)
+- Method: `test_<what>_<condition>` (e.g., `test_collect_bulk_connection_error`)
 
 ---
 
@@ -275,6 +315,31 @@ class TestClickHouseCollector:
 5. **Registry pattern** - Components auto-register via decorators
 6. **Optional storage** - Each pipeline stage can optionally save results
 7. **No hardcoded assumptions** - Time intervals, seasonal features are configurable
+8. **Time series first** - Analyst writes ONE query, system handles everything
+
+### Time Series Architecture
+
+**CRITICAL:** DetectK uses time series architecture where queries return multiple rows.
+
+**Query Pattern:**
+
+```sql
+SELECT
+    toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+    count() AS value
+FROM events
+WHERE timestamp >= toDateTime('{{ period_start }}')
+  AND timestamp < toDateTime('{{ period_finish }}')
+GROUP BY period_time
+ORDER BY period_time
+```
+
+**Key Points:**
+- Analyst writes query ONCE with `{{ period_start }}`, `{{ period_finish }}` variables
+- Collector stores query as Jinja2 template (NOT rendered at config load)
+- Collector renders query on EACH `collect_bulk()` call with different periods
+- Same query works for real-time (10 min) and bulk load (30 days)
+- ConfigLoader does NOT render `collector.params.query` field (critical!)
 
 ### Component Design
 
@@ -293,7 +358,11 @@ from detectk.registry import CollectorRegistry
 class MyDatabaseCollector(BaseCollector):
     """Custom database collector."""
 
-    def collect(self, at_time: datetime | None = None) -> DataPoint:
+    def collect_bulk(
+        self,
+        period_start: datetime,
+        period_finish: datetime,
+    ) -> list[DataPoint]:
         # Implementation
         pass
 ```
@@ -329,7 +398,10 @@ profiles:
 collector:
   profile: "clickhouse_prod"
   params:
-    query: "SELECT count() FROM sessions"
+    query: |
+      SELECT ... WHERE timestamp >= '{{ period_start }}'
+    timestamp_column: "period_time"
+    value_column: "value"
 ```
 
 **Extract common code** into base classes or utility functions.
@@ -439,16 +511,18 @@ Closes #123
 2. Implement `BaseCollector`:
 
 ```python
+from datetime import datetime
 from detectk.base import BaseCollector
 from detectk.registry import CollectorRegistry
 from detectk.models import DataPoint
-from detectk.exceptions import CollectionError
+from detectk.exceptions import CollectionError, ConfigurationError
 
 @CollectorRegistry.register("mydb")
 class MyDatabaseCollector(BaseCollector):
     """Collector for MyDatabase.
 
-    Supports collecting metrics from MyDatabase via SQL queries.
+    Supports collecting time series metrics from MyDatabase via SQL queries.
+    Query must return multiple rows with timestamp and value columns.
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -457,28 +531,75 @@ class MyDatabaseCollector(BaseCollector):
         Args:
             config: Configuration dictionary with keys:
                    - connection_string: Database connection string
-                   - query: SQL query returning single value
+                   - query: SQL query with {{ period_start }}, {{ period_finish }} variables
+                   - timestamp_column: Name of timestamp column (default: "period_time")
+                   - value_column: Name of value column (default: "value")
+                   - context_columns: Optional list of context column names
 
         Raises:
-            ConfigurationError: If required config keys missing
+            ConfigurationError: If required config keys missing or query invalid
         """
         self.connection_string = config["connection_string"]
-        self.query = config["query"]
+        self.query_template = config["query"]
+        self.timestamp_column = config.get("timestamp_column", "period_time")
+        self.value_column = config.get("value_column", "value")
+        self.context_columns = config.get("context_columns", [])
 
-    def collect(self, at_time: datetime | None = None) -> DataPoint:
-        """Collect metric value from MyDatabase.
+        # Validate query has required variables
+        self.validate_config()
+
+    def validate_config(self) -> None:
+        """Validate query has required Jinja2 variables."""
+        if "{{ period_start }}" not in self.query_template:
+            raise ConfigurationError("Query must contain {{ period_start }}")
+        if "{{ period_finish }}" not in self.query_template:
+            raise ConfigurationError("Query must contain {{ period_finish }}")
+
+    def collect_bulk(
+        self,
+        period_start: datetime,
+        period_finish: datetime,
+    ) -> list[DataPoint]:
+        """Collect time series data for specified period.
 
         Args:
-            at_time: Collection timestamp (default: now())
+            period_start: Start of time range
+            period_finish: End of time range
 
         Returns:
-            DataPoint with collected value
+            List of DataPoints (can be 1 point or thousands)
 
         Raises:
             CollectionError: If query fails or returns no data
         """
-        # Implementation
-        pass
+        # 1. Render query with time range
+        from jinja2 import Template
+        query = Template(self.query_template).render(
+            period_start=period_start.isoformat(),
+            period_finish=period_finish.isoformat(),
+        )
+
+        # 2. Execute query
+        try:
+            result = self._execute_query(query)
+        except Exception as e:
+            raise CollectionError(f"Query failed: {e}")
+
+        # 3. Parse rows into DataPoints
+        datapoints = []
+        for row in result:
+            timestamp = row[self.timestamp_column]
+            value = row[self.value_column]
+            context = {col: row[col] for col in self.context_columns}
+
+            datapoints.append(DataPoint(
+                timestamp=timestamp,
+                value=value,
+                is_missing=value is None,
+                context=context if context else None,
+            ))
+
+        return datapoints
 
     def close(self) -> None:
         """Close database connection."""
@@ -494,6 +615,7 @@ class MyDatabaseCollector(BaseCollector):
 1. Implement `BaseDetector` in `packages/detectors/`
 
 ```python
+from datetime import datetime
 from detectk.base import BaseDetector, BaseStorage
 from detectk.registry import DetectorRegistry
 from detectk.models import DetectionResult
@@ -525,14 +647,14 @@ class MyAlgorithmDetector(BaseDetector):
     def detect(
         self,
         metric_name: str,
-        value: float,
+        value: float | None,
         timestamp: datetime,
     ) -> DetectionResult:
         """Detect anomalies using MyAlgorithm.
 
         Args:
             metric_name: Name of metric being checked
-            value: Current metric value
+            value: Current metric value (can be None for missing data)
             timestamp: Timestamp of current value
 
         Returns:
@@ -541,8 +663,26 @@ class MyAlgorithmDetector(BaseDetector):
         Raises:
             DetectionError: If detection fails
         """
-        # Implementation
-        pass
+        # 1. Query historical data
+        df = self.storage.query_datapoints(
+            metric_name=metric_name,
+            window=self.window_size,
+            end_time=timestamp,
+        )
+
+        # 2. Apply algorithm
+        is_anomaly = value > self.threshold if value else False
+
+        # 3. Return DetectionResult
+        return DetectionResult(
+            metric_name=metric_name,
+            timestamp=timestamp,
+            value=value,
+            is_anomaly=is_anomaly,
+            score=value / self.threshold if value and self.threshold > 0 else 0,
+            lower_bound=0,
+            upper_bound=self.threshold,
+        )
 ```
 
 2. Add comprehensive tests
@@ -609,19 +749,30 @@ class MyServiceAlerter(BaseAlerter):
 All public APIs should have examples in docstrings:
 
 ```python
-def collect(self, at_time: datetime | None = None) -> DataPoint:
-    """Collect metric value.
+def collect_bulk(
+    self,
+    period_start: datetime,
+    period_finish: datetime,
+) -> list[DataPoint]:
+    """Collect time series data.
 
     Example:
         >>> collector = ClickHouseCollector(config)
-        >>> point = collector.collect()
-        >>> print(point.value)
-        42.5
+        >>> # Real-time: 10 minutes
+        >>> points = collector.collect_bulk(
+        ...     period_start=datetime(2024, 11, 2, 14, 0),
+        ...     period_finish=datetime(2024, 11, 2, 14, 10),
+        ... )
+        >>> print(len(points))
+        1
 
-        >>> # Backtest mode with specific time
-        >>> point = collector.collect(at_time=datetime(2024, 1, 1, 12, 0))
-        >>> print(point.timestamp)
-        2024-01-01 12:00:00
+        >>> # Bulk load: 30 days
+        >>> points = collector.collect_bulk(
+        ...     period_start=datetime(2024, 1, 1),
+        ...     period_finish=datetime(2024, 1, 31),
+        ... )
+        >>> print(len(points))
+        4464
     """
 ```
 
@@ -632,7 +783,7 @@ Create example configs in `examples/` directory:
 ```
 examples/
 ├── clickhouse/
-│   ├── simple_query.yaml
+│   ├── simple_timeseries.yaml
 │   └── seasonal_mad.yaml
 ├── sql/
 │   ├── postgresql_sessions.yaml

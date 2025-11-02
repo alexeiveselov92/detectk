@@ -447,3 +447,416 @@ Documentation: https://docs.detectk.io/guides/quickstart
 
 ---
 
+
+---
+
+## Decision 18: Time Series Data Collection Architecture
+
+**Date:** 2025-11-02
+
+**Problem:** Original implementation collected single aggregated values (1 row per query). This was inefficient for bulk loading and didn't work well with time series algorithms that need historical context.
+
+**Decision:** Implement `collect_bulk(period_start, period_finish)` that returns multiple (timestamp, value) rows.
+
+**Rationale:**
+
+1. **Efficiency:** ONE query returns ALL data points for a time range
+   - Old: 4,320 queries for 30 days of 10-min data
+   - New: 1 query for 30 days of 10-min data
+
+2. **Simplicity:** Analyst writes ONE query with variables
+   - Same query works for real-time (10 min) and bulk loading (30 days)
+   - No separate logic for different time ranges
+
+3. **Flexibility:** Query renders on each call with different periods
+   - Collector stores query as Jinja2 template
+   - Renders with `period_start`, `period_finish` on each `collect_bulk()` call
+
+**Example Query:**
+
+```sql
+SELECT
+    toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+    count() AS value
+FROM events
+WHERE timestamp >= toDateTime('{{ period_start }}')
+  AND timestamp < toDateTime('{{ period_finish }}')
+GROUP BY period_time
+ORDER BY period_time
+```
+
+**Implementation:**
+
+```python
+class ClickHouseCollector(BaseCollector):
+    def __init__(self, config):
+        self.query_template = config["query"]  # Store with {{ }}
+    
+    def collect_bulk(self, period_start, period_finish):
+        # Render query with specific period
+        query = Template(self.query_template).render(
+            period_start=period_start.isoformat(),
+            period_finish=period_finish.isoformat(),
+        )
+        
+        result = client.execute(query)
+        return [DataPoint(timestamp=row[0], value=row[1]) for row in result]
+```
+
+**Trade-offs:**
+
+✅ **Pros:**
+- Much more efficient (1 query vs thousands)
+- Works with any time range
+- Supports time series algorithms
+- Simpler code (no iteration)
+
+❌ **Cons:**
+- Slightly more complex query (must include GROUP BY)
+- Query must be written to return time series
+
+**Alternatives Considered:**
+
+1. **Keep single-point collection** → Rejected (too inefficient)
+2. **Separate methods for real-time vs bulk** → Rejected (code duplication)
+3. **Collector decides time range** → Rejected (less flexible)
+
+---
+
+## Decision 19: Remove BacktestRunner - Use Normal Pipeline
+
+**Date:** 2025-11-02
+
+**Problem:** BacktestRunner was a separate class that iterated through time steps, calling `collect()` thousands of times for historical data. This was inefficient and complex.
+
+**Realization:** "Backtesting" is just normal data loading with alerts disabled!
+
+**Decision:** Remove BacktestRunner entirely. Use normal pipeline with `alerter.enabled = false`.
+
+**Rationale:**
+
+There's NO difference between:
+- Production monitoring (continuous, alerts enabled)
+- Historical data loading (one-time, alerts disabled)
+
+It's the SAME code, just different config:
+
+**Before (with BacktestRunner):**
+```python
+# Iterate 4,320 times for 30 days of 10-min data
+for current_time in time_steps:
+    result = checker.execute(config, current_time)  # 1 query → 1 row
+# Total: 4,320 queries
+```
+
+**After (without BacktestRunner):**
+```python
+# Call once with time range
+points = collector.collect_bulk(start, end)  # 1 query → 4,320 rows
+storage.save_datapoints_bulk(metric_name, points)
+```
+
+**Migration:**
+
+**OLD (BacktestConfig):**
+```yaml
+backtest:
+  enabled: true
+  data_load_start: "2024-01-01"
+  detection_start: "2024-02-01"
+  detection_end: "2024-03-01"
+  step_interval: "10 minutes"
+```
+
+**NEW (ScheduleConfig):**
+```yaml
+schedule:
+  start_time: "2024-01-01"
+  end_time: "2024-03-01"
+  interval: "10 minutes"
+  batch_load_days: 30  # Load in 30-day batches
+
+alerter:
+  enabled: false  # NO alerts during historical load
+```
+
+**Trade-offs:**
+
+✅ **Pros:**
+- Simpler code (no BacktestRunner class)
+- Same code path for production and historical
+- Much faster (1 query vs thousands)
+- Easier to understand
+
+❌ **Cons:**
+- No separate "backtest" mode (but this is good!)
+
+**Implementation:**
+
+Removed:
+- `detectk/backtest.py` (BacktestRunner class)
+- `dtk backtest` CLI command
+- BacktestConfig from config models
+
+Added:
+- ScheduleConfig (unified scheduling)
+- `alerter.enabled` flag
+- Checkpoint system for resuming loads
+
+---
+
+## Decision 20: ConfigLoader Must NOT Render Collector Queries
+
+**Date:** 2025-11-02
+
+**Problem:** ConfigLoader was rendering ENTIRE config as Jinja2 template at load time. This made `{{ period_start }}` static, preventing collectors from calling `collect_bulk()` with different time ranges.
+
+**Example of broken behavior:**
+```yaml
+# Config loaded at 10:00 AM
+collector:
+  params:
+    query: |
+      WHERE timestamp >= '{{ execution_time }}'  # Rendered at load time!
+```
+
+After ConfigLoader: `WHERE timestamp >= '2024-11-02 10:00'` (hardcoded!)
+
+Collector can't change this later → can't bulk load historical data!
+
+**Decision:** ConfigLoader does NOT render `collector.params.query` field. Preserves `{{ }}` intact.
+
+**Implementation:**
+
+Changed ConfigLoader processing order:
+
+**Before:**
+1. Substitute env vars: `${VAR_NAME}` → value
+2. Render ENTIRE file as Jinja2 template
+3. Parse YAML
+
+**After:**
+1. Substitute env vars: `${VAR_NAME}` → value
+2. Parse YAML (NO rendering)
+3. Selectively render Jinja2 EXCEPT `collector.params.query`
+
+**Code:**
+
+```python
+def _process_dict_templates(self, data, template_context, path=""):
+    # Skip rendering collector.params.query
+    if path == "collector.params.query":
+        return data  # Leave {{ period_start }}, {{ period_finish }} intact
+    
+    # Render other fields
+    if isinstance(data, str) and "{{" in data:
+        return Template(data).render(**template_context)
+    
+    return data
+```
+
+**Rationale:**
+
+Collector needs to render query on EACH call with different periods:
+- Real-time: `collect_bulk(now-10min, now)`
+- Bulk load: `collect_bulk(2024-01-01, 2024-01-31)`
+
+If ConfigLoader rendered query at load time, it would be static → impossible to change periods!
+
+**Trade-offs:**
+
+✅ **Pros:**
+- Collectors can render queries dynamically
+- Same query works for any time range
+- Enables bulk loading
+
+❌ **Cons:**
+- Slightly more complex ConfigLoader logic
+
+**Critical:** Without this fix, time series architecture doesn't work!
+
+---
+
+## Decision 21: Flexible Column Naming with Explicit Mapping
+
+**Date:** 2025-11-02
+
+**Problem:** How to let analyst name query result columns however they want, while DetectK knows which column is timestamp and which is value?
+
+**Decision:** Add explicit column mapping in CollectorConfig.
+
+**Implementation:**
+
+```yaml
+collector:
+  params:
+    query: |
+      SELECT
+        my_custom_timestamp AS ts,    # Analyst chooses name
+        my_metric_value AS val         # Analyst chooses name
+      FROM ...
+    timestamp_column: "ts"    # Tell DetectK which is timestamp
+    value_column: "val"       # Tell DetectK which is value
+    context_columns: ["hour_of_day"]  # Optional seasonal features
+```
+
+**Collector uses mapping to extract values:**
+
+```python
+timestamp = row[self.timestamp_column]  # row["ts"]
+value = row[self.value_column]          # row["val"]
+
+if self.context_columns:
+    context = {col: row[col] for col in self.context_columns}
+```
+
+**Rationale:**
+
+1. **Flexibility:** Analyst can use database conventions (e.g., `period_time`, `metric_value`)
+2. **No hardcoded names:** DetectK doesn't assume column names
+3. **Context support:** Optional seasonal features without schema changes
+
+**Defaults:**
+
+```python
+timestamp_column: str = "period_time"  # Default
+value_column: str = "value"           # Default
+context_columns: list[str] | None = None  # Optional
+```
+
+**Trade-offs:**
+
+✅ **Pros:**
+- Analyst controls column naming
+- Works with any database conventions
+- Easy to add context/metadata
+
+❌ **Cons:**
+- Extra config (but has sensible defaults)
+
+---
+
+## Decision 22: ReplacingMergeTree for Automatic Deduplication
+
+**Date:** 2025-11-02
+
+**Problem:** When bulk loading historical data, interruptions mean some data loaded twice. How to prevent duplicates without manual deduplication?
+
+**Decision:** Use ClickHouse ReplacingMergeTree engine for `dtk_datapoints` table.
+
+**Implementation:**
+
+```sql
+CREATE TABLE dtk_datapoints (
+    metric_name String,
+    collected_at DateTime64(3),
+    value Float64,
+    is_missing UInt8,
+    context String
+) ENGINE = ReplacingMergeTree()  -- Automatic deduplication!
+ORDER BY (metric_name, collected_at);
+```
+
+**How It Works:**
+
+Rows with same `(metric_name, collected_at)` are automatically deduplicated during merges:
+
+```sql
+-- Insert same data twice
+INSERT INTO dtk_datapoints VALUES ('metric', '2024-11-02 14:00', 100, 0, '{}');
+INSERT INTO dtk_datapoints VALUES ('metric', '2024-11-02 14:00', 100, 0, '{}');
+
+-- After merge: only 1 row
+SELECT * FROM dtk_datapoints WHERE metric_name = 'metric';
+```
+
+**Benefits:**
+
+1. **Idempotent loads:** Safe to re-run bulk loading without checking what's already loaded
+2. **Crash recovery:** Resume interrupted loads without worrying about duplicates
+3. **Corrected data:** Re-load corrected data, old data replaced automatically
+
+**Checkpoint System:**
+
+Even with deduplication, checkpoint system helps skip already-loaded ranges:
+
+```python
+last = storage.get_last_loaded_timestamp("metric")
+if last:
+    start = last + timedelta(minutes=10)  # Resume from here
+```
+
+**Trade-offs:**
+
+✅ **Pros:**
+- Automatic deduplication (no manual logic)
+- Safe to re-load data
+- Crash recovery without state management
+
+❌ **Cons:**
+- ClickHouse-specific (but PostgreSQL has ON CONFLICT UPDATE)
+- Slight performance overhead during merges (minimal)
+
+**Alternatives Considered:**
+
+1. **Manual deduplication** → Rejected (complex, error-prone)
+2. **Check before insert** → Rejected (slow, race conditions)
+3. **UNIQUE constraint** → Rejected (not supported in MergeTree)
+
+---
+
+## Decision 23: Batch Loading for Memory Efficiency
+
+**Date:** 2025-11-02
+
+**Problem:** Loading 1 year of 10-minute data = ~52,560 rows in one query. This can cause memory issues and slow queries.
+
+**Decision:** Load in configurable batches (default: 30 days).
+
+**Implementation:**
+
+```yaml
+schedule:
+  start_time: "2024-01-01"
+  end_time: "2024-12-31"
+  interval: "10 minutes"
+  batch_load_days: 30  # Load in 30-day batches
+```
+
+**Execution:**
+
+```python
+batches = calculate_batches(
+    start="2024-01-01",
+    end="2024-12-31",
+    batch_days=30
+)
+# Results: [(2024-01-01, 2024-01-31), (2024-02-01, 2024-02-29), ...]
+
+for batch_start, batch_end in batches:
+    points = collector.collect_bulk(batch_start, batch_end)  # ~4,464 points
+    storage.save_datapoints_bulk(metric_name, points)
+```
+
+**Benefits:**
+
+1. **Memory efficient:** Process 4,464 points at a time instead of 52,560
+2. **Progress tracking:** Can log "Loaded batch 3/12"
+3. **Checkpoint friendly:** If crash, resume from last completed batch
+4. **Database friendly:** Smaller queries are faster and less resource-intensive
+
+**Configurable batch size:**
+- Small intervals (1 min): Use larger batches (60 days)
+- Large intervals (1 hour): Use smaller batches (7 days)
+
+**Trade-offs:**
+
+✅ **Pros:**
+- Memory efficient
+- Resumable
+- Progress visibility
+
+❌ **Cons:**
+- Multiple queries instead of one (but still efficient)
+
+---
