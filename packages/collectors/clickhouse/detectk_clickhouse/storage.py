@@ -45,21 +45,34 @@ class ClickHouseStorage(BaseStorage):
         ...     "database": "default",
         ... }
         >>> storage = ClickHouseStorage(config)
-        >>> storage.save_datapoint(
-        ...     "sessions_10min",
-        ...     DataPoint(timestamp=datetime.now(), value=1234.5)
-        ... )
+        >>>
+        >>> # Save single point (real-time)
+        >>> point = DataPoint(timestamp=datetime.now(), value=1234.5)
+        >>> storage.save_datapoints_bulk("sessions_10min", [point])
+        >>>
+        >>> # Save multiple points (bulk load)
+        >>> points = [
+        ...     DataPoint(timestamp=datetime(2024, 11, 2, 14, 0), value=1200.0),
+        ...     DataPoint(timestamp=datetime(2024, 11, 2, 14, 10), value=1250.0),
+        ... ]
+        >>> storage.save_datapoints_bulk("sessions_10min", points)
+        >>>
+        >>> # Get checkpoint (resume interrupted load)
+        >>> last = storage.get_last_loaded_timestamp("sessions_10min")
+        >>> if last:
+        ...     print(f"Resume from {last}")
     """
 
     # Table creation SQL
+    # Using ReplacingMergeTree to prevent duplicate data on re-loads
     DATAPOINTS_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS dtk_datapoints (
-        id UInt64,
         metric_name String,
         collected_at DateTime64(3),
         value Float64,
+        is_missing UInt8,  -- Boolean flag for NULL values
         context String  -- JSON string for flexibility
-    ) ENGINE = MergeTree()
+    ) ENGINE = ReplacingMergeTree()
     PARTITION BY toYYYYMM(collected_at)
     ORDER BY (metric_name, collected_at)
     SETTINGS index_granularity = 8192;
@@ -179,42 +192,147 @@ class ClickHouseStorage(BaseStorage):
                 operation="create_tables",
             )
 
-    def save_datapoint(self, metric_name: str, datapoint: DataPoint) -> None:
-        """Save collected metric value to dtk_datapoints table.
+    def save_datapoints_bulk(
+        self,
+        metric_name: str,
+        datapoints: list[DataPoint],
+    ) -> None:
+        """Bulk insert collected metric values to dtk_datapoints table.
+
+        This method works for ANY number of datapoints:
+        - Single point: [DataPoint(...)] - for real-time collection
+        - Multiple points: [DataPoint(...), ...] - for bulk loading
+
+        Uses ReplacingMergeTree to prevent duplicates on re-loads.
+        If you load the same (metric_name, timestamp) twice, ClickHouse
+        will automatically deduplicate during merges.
 
         Args:
             metric_name: Name of metric
-            datapoint: Data point to save
+            datapoints: List of data points to save (1 to 10,000+ points)
 
         Raises:
             StorageError: If save operation fails
+
+        Example:
+            >>> # Real-time (1 point)
+            >>> storage.save_datapoints_bulk("sessions", [point])
+            >>>
+            >>> # Bulk load (4,464 points for 30 days at 10-min intervals)
+            >>> storage.save_datapoints_bulk("sessions", points)
+        """
+        if not datapoints:
+            logger.debug(f"No datapoints to save for {metric_name}")
+            return
+
+        try:
+            client = self._get_client()
+
+            # Prepare batch data
+            batch_data = []
+            for dp in datapoints:
+                # Serialize metadata to JSON
+                context_json = json.dumps(dp.metadata) if dp.metadata else "{}"
+
+                # Handle NULL values (is_missing flag)
+                value = dp.value if dp.value is not None else 0.0
+                is_missing = 1 if dp.is_missing else 0
+
+                batch_data.append(
+                    (
+                        metric_name,
+                        dp.timestamp,
+                        value,
+                        is_missing,
+                        context_json,
+                    )
+                )
+
+            # Bulk insert
+            client.execute(
+                "INSERT INTO dtk_datapoints (metric_name, collected_at, value, is_missing, context) VALUES",
+                batch_data,
+            )
+
+            logger.debug(
+                f"Bulk saved {len(datapoints)} datapoints for {metric_name} "
+                f"(period: {datapoints[0].timestamp} to {datapoints[-1].timestamp})"
+            )
+
+        except ClickHouseError as e:
+            raise StorageError(
+                f"Failed to bulk save datapoints to ClickHouse: {e}",
+                operation="save_datapoints_bulk",
+                details={
+                    "metric_name": metric_name,
+                    "count": len(datapoints),
+                    "period_start": str(datapoints[0].timestamp) if datapoints else None,
+                    "period_finish": str(datapoints[-1].timestamp) if datapoints else None,
+                },
+            )
+        except Exception as e:
+            raise StorageError(
+                f"Unexpected error bulk saving datapoints: {e}",
+                operation="save_datapoints_bulk",
+            )
+
+    def get_last_loaded_timestamp(self, metric_name: str) -> datetime | None:
+        """Get timestamp of last loaded datapoint for checkpoint system.
+
+        This method is used for:
+        - Resuming interrupted bulk loads
+        - Checking what data is already present
+        - Avoiding duplicate inserts (though ReplacingMergeTree handles this)
+
+        Args:
+            metric_name: Name of metric to check
+
+        Returns:
+            Timestamp of most recent datapoint, or None if no data exists
+
+        Raises:
+            StorageError: If query fails
+
+        Example:
+            >>> last = storage.get_last_loaded_timestamp("sessions")
+            >>> if last:
+            >>>     print(f"Last data: {last}")
+            >>>     resume_from = last + timedelta(minutes=10)
+            >>> else:
+            >>>     print("No data loaded yet, starting from scratch")
         """
         try:
             client = self._get_client()
 
-            # Serialize metadata to JSON
-            context_json = json.dumps(datapoint.metadata) if datapoint.metadata else "{}"
+            # Query most recent timestamp for this metric
+            query = """
+            SELECT MAX(collected_at) as last_timestamp
+            FROM dtk_datapoints
+            WHERE metric_name = %(metric_name)s
+            """
+            params = {"metric_name": metric_name}
 
-            # Generate ID (timestamp in microseconds)
-            row_id = int(datapoint.timestamp.timestamp() * 1_000_000)
+            result = client.execute(query, params)
 
-            # Insert data
-            client.execute(
-                "INSERT INTO dtk_datapoints (id, metric_name, collected_at, value, context) VALUES",
-                [(row_id, metric_name, datapoint.timestamp, datapoint.value, context_json)],
-            )
-
-            logger.debug(f"Saved datapoint for {metric_name}: {datapoint.value} at {datapoint.timestamp}")
+            # Extract timestamp from result
+            if result and result[0] and result[0][0] is not None:
+                last_timestamp = result[0][0]
+                logger.debug(f"Last loaded timestamp for {metric_name}: {last_timestamp}")
+                return last_timestamp
+            else:
+                logger.debug(f"No data loaded yet for {metric_name}")
+                return None
 
         except ClickHouseError as e:
             raise StorageError(
-                f"Failed to save datapoint to ClickHouse: {e}",
-                operation="save_datapoint",
+                f"Failed to get last loaded timestamp from ClickHouse: {e}",
+                operation="get_last_loaded_timestamp",
+                details={"metric_name": metric_name},
             )
         except Exception as e:
             raise StorageError(
-                f"Unexpected error saving datapoint: {e}",
-                operation="save_datapoint",
+                f"Unexpected error getting last loaded timestamp: {e}",
+                operation="get_last_loaded_timestamp",
             )
 
     def query_datapoints(
