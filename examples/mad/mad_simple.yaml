@@ -15,7 +15,8 @@ collector:
         count() as value,
         now() as timestamp
       FROM sessions
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "mad"

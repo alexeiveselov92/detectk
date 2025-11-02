@@ -125,7 +125,8 @@ collector:
       SELECT
         countIf(status_code = 200) / count() * 100 as value
       FROM http_requests
-      WHERE timestamp >= now() - INTERVAL 1 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "threshold"
@@ -139,7 +140,8 @@ detector:
 ```yaml
 collector:
   params:
-    query: "SELECT sum(amount) as value FROM purchases WHERE date = today()"
+    query: "SELECT sum(amount) as value FROM purchases WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')"
 
 detector:
   type: "threshold"
@@ -154,7 +156,8 @@ detector:
 ```yaml
 collector:
   params:
-    query: "SELECT quantile(0.95)(duration_ms) as value FROM requests WHERE timestamp >= now() - INTERVAL 5 MINUTE"
+    query: "SELECT quantile(0.95)(duration_ms) as value FROM requests WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')"
 
 detector:
   type: "threshold"
@@ -312,7 +315,8 @@ name: "sessions_10min"
 collector:
   type: "clickhouse"
   params:
-    query: "SELECT count(DISTINCT user_id) as value FROM sessions WHERE timestamp >= now() - INTERVAL 10 MINUTE"
+    query: "SELECT count(DISTINCT user_id) as value FROM sessions WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')"
 
 detector:
   type: "mad"
@@ -337,7 +341,8 @@ name: "daily_revenue"
 
 collector:
   params:
-    query: "SELECT sum(amount) as value FROM purchases WHERE date = today()"
+    query: "SELECT sum(amount) as value FROM purchases WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')"
 
 detector:
   type: "mad"
@@ -397,7 +402,13 @@ name: "sessions_ab_test"
 collector:
   type: "clickhouse"
   params:
-    query: "SELECT count() as value FROM sessions"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # Multiple detectors
 detectors:

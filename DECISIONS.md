@@ -147,7 +147,13 @@ profiles:
 collector:
   profile: "clickhouse_analytics"
   params:
-    query: "SELECT count() FROM sessions"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **2. Minimal (env defaults):**
@@ -364,7 +370,13 @@ dtk init-project --minimal
    collector:
      profile: "prod_clickhouse"  # Reference to detectk_profiles.yaml
      params:
-       query: "SELECT count(DISTINCT user_id) as value FROM sessions"
+       query: |
+         SELECT
+           toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+           count(DISTINCT user_id) as value
+         FROM sessions
+         WHERE timestamp >= toDateTime('{{ period_start }}')
+           AND timestamp < toDateTime('{{ period_finish }}')
    detector:
      type: "mad"
      params: {window_size: "30 days", n_sigma: 3.0}

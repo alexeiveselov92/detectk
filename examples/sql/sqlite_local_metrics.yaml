@@ -29,10 +29,11 @@ collector:
     # SQLite-specific SQL syntax
     query: |
       SELECT
-        COUNT(*) as value,
-        datetime('now') as timestamp
+        datetime('{{ period_start }}', '+10 minutes') as period_time,
+        COUNT(*) as value
       FROM events
-      WHERE timestamp >= datetime('now', '-10 minutes')
+      WHERE timestamp >= datetime('{{ period_start }}')
+        AND timestamp < datetime('{{ period_finish }}')
         AND event_type = 'user_action'
 
     timeout: 10  # SQLite is fast, short timeout

@@ -22,7 +22,8 @@ collector:
       SELECT
         countOrNull() as value
       FROM events
-      WHERE toDate(timestamp) = today()
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # Detector: Missing data indicates partition issue
 detector:

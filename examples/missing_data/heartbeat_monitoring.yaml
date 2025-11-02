@@ -21,10 +21,12 @@ collector:
     # If ETL didn't run, this returns 0 or no rows
     query: |
       SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
         count() as value,
         max(created_at) as last_event_time
       FROM etl_processed_data
-      WHERE created_at >= now() - INTERVAL 10 MINUTE
+      WHERE created_at >= toDateTime('{{ period_start }}')
+        AND created_at < toDateTime('{{ period_finish }}')
 
 # Detector: Missing Data Detection
 detector:

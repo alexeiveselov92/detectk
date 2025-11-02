@@ -22,10 +22,11 @@ collector:
     # MySQL-specific SQL syntax
     query: |
       SELECT
-        COUNT(*) as value,
-        NOW() as timestamp
+        DATE_ADD('{{ period_start }}', INTERVAL 1 HOUR) as period_time,
+        COUNT(*) as value
       FROM orders
-      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+      WHERE created_at >= '{{ period_start }}'
+        AND created_at < '{{ period_finish }}'
         AND status IN ('pending', 'completed')
 
     timeout: 30

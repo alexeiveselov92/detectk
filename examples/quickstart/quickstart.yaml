@@ -22,10 +22,11 @@ collector:
     port: 9000
     database: "default"
     # Simple query that returns a constant value
+    # For real metrics, use period_start/period_finish for time window filtering
     query: |
       SELECT
-        100 as value,
-        now() as timestamp
+        toStartOfInterval(now(), INTERVAL 10 MINUTE) as period_time,
+        100 as value
 
 # Detector: Simple threshold check
 # Alert if value > 50

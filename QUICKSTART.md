@@ -159,10 +159,13 @@ collector:
   params:
     query: |
       SELECT
-        toStartOfInterval(now(), INTERVAL 5 minute) AS period_time,
+        toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
         count() AS value
       FROM heartbeat_events
-      WHERE timestamp >= now() - INTERVAL 5 minute
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
 
 detector:
   type: "missing_data"

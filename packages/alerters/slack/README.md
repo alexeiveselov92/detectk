@@ -32,7 +32,13 @@ collector:
   type: "clickhouse"
   params:
     host: "localhost"
-    query: "SELECT count() as value FROM sessions"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "mad"

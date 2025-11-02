@@ -31,7 +31,8 @@ collector:
     query: |
       SELECT count(DISTINCT user_id) as value
       FROM sessions
-      WHERE timestamp >= '{{ execution_time }}' - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}') 10 MINUTE
         AND timestamp < '{{ execution_time }}'
 
 detector:
@@ -292,7 +293,13 @@ name: "sessions_ab_test"
 collector:
   type: "clickhouse"
   params:
-    query: "SELECT count() as value FROM sessions"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detectors:
   # Strategy A: Conservative MAD
@@ -472,7 +479,8 @@ collector:
     query: |
       SELECT count() as value
       FROM events
-      WHERE timestamp >= '{{ execution_time }}' - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}') 10 MINUTE
         AND timestamp < '{{ execution_time }}'
 
 # ✗ BAD - uses now(), doesn't work for backtesting
@@ -481,7 +489,8 @@ collector:
     query: |
       SELECT count() as value
       FROM events
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 ## Troubleshooting

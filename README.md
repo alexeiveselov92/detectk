@@ -216,9 +216,13 @@ collector:
   params:
     query: |
       SELECT
-        my_timestamp AS ts,      # Any name!
-        my_value AS metric_val   # Any name!
-      FROM ...
+        toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS ts,
+        count() AS metric_val
+      FROM my_table
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY ts
+      ORDER BY ts
     timestamp_column: "ts"         # Tell DetectK which column is timestamp
     value_column: "metric_val"     # Tell DetectK which column is value
 ```
@@ -291,11 +295,15 @@ collector:
   params:
     query: |
       SELECT
-        period_time,
-        value,
+        toStartOfInterval(timestamp, INTERVAL {{ interval }}) AS period_time,
+        count() AS value,
         toHour(period_time) AS hour_of_day,
         toDayOfWeek(period_time) AS day_of_week
-      FROM ...
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
     context_columns: ["hour_of_day", "day_of_week"]
 
 detector:

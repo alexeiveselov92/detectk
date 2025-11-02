@@ -15,7 +15,8 @@ collector:
     query: |
       SELECT count() as value
       FROM sessions
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # Rest of config is unchanged
 detector:

@@ -21,7 +21,8 @@ collector:
     query: |
       SELECT uniqExact(user_id) as value
       FROM events
-      WHERE timestamp >= now() - INTERVAL 5 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 storage:
   enabled: true

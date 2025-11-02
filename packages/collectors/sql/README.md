@@ -38,10 +38,11 @@ collector:
     connection_string: "postgresql://user:password@localhost:5432/analytics"
     query: |
       SELECT
-        COUNT(DISTINCT user_id) as value,
-        NOW() as timestamp
+        date_trunc('minute', '{{ period_finish }}'::timestamp) as period_time,
+        COUNT(DISTINCT user_id) as value
       FROM sessions
-      WHERE created_at >= NOW() - INTERVAL '10 minutes'
+      WHERE created_at >= '{{ period_start }}'::timestamp
+        AND created_at < '{{ period_finish }}'::timestamp
 
 detector:
   type: "threshold"
@@ -62,10 +63,11 @@ collector:
     connection_string: "mysql://user:password@localhost:3306/ecommerce"
     query: |
       SELECT
-        COUNT(*) as value,
-        NOW() as timestamp
+        DATE_ADD('{{ period_start }}', INTERVAL 1 HOUR) as period_time,
+        COUNT(*) as value
       FROM orders
-      WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+      WHERE created_at >= '{{ period_start }}'
+        AND created_at < '{{ period_finish }}'
 ```
 
 ### SQLite
@@ -80,10 +82,11 @@ collector:
     connection_string: "sqlite:///./metrics.db"
     query: |
       SELECT
-        COUNT(*) as value,
-        datetime('now') as timestamp
+        datetime('{{ period_start }}', '+10 minutes') as period_time,
+        COUNT(*) as value
       FROM events
-      WHERE timestamp >= datetime('now', '-10 minutes')
+      WHERE timestamp >= datetime('{{ period_start }}')
+        AND timestamp < datetime('{{ period_finish }}')
 ```
 
 ## Configuration

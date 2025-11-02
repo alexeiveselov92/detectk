@@ -14,7 +14,8 @@ collector:
     query: |
       SELECT avg(response_time_ms) as value
       FROM api_requests
-      WHERE timestamp >= now() - INTERVAL 1 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "mad"

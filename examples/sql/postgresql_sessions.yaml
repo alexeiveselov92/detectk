@@ -22,10 +22,11 @@ collector:
     # PostgreSQL-specific SQL syntax
     query: |
       SELECT
-        COUNT(DISTINCT user_id) as value,
-        NOW() as timestamp
+        date_trunc('minute', '{{ period_start }}'::timestamp + INTERVAL '10 minutes') as period_time,
+        COUNT(DISTINCT user_id) as value
       FROM sessions
-      WHERE created_at >= NOW() - INTERVAL '10 minutes'
+      WHERE created_at >= '{{ period_start }}'::timestamp
+        AND created_at < '{{ period_finish }}'::timestamp
         AND status = 'active'
 
     timeout: 30

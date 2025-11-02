@@ -31,10 +31,11 @@ collector:
     database: "analytics"
     query: |
       SELECT
-        count() as value,
-        now() as timestamp
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
       FROM sessions
-      WHERE timestamp > now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "threshold"
@@ -71,7 +72,13 @@ collector:
   params:
     host: "localhost"
     database: "analytics"
-    query: "SELECT count() as value, now() as timestamp FROM sessions"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # Multiple detectors with auto-generated IDs
 detectors:

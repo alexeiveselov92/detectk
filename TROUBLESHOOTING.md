@@ -199,7 +199,8 @@ Syntax error: unexpected token "FORM"
 clickhouse-client --query "
   SELECT count() as value
   FROM events
-  WHERE timestamp >= now() - INTERVAL 10 MINUTE
+  WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 "
 
 # Check Jinja2 rendering

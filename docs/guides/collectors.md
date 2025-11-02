@@ -33,7 +33,8 @@ collector:
     query: |
       SELECT count() as value
       FROM events
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 ### Connection Parameters
@@ -78,7 +79,8 @@ collector:
     query: |
       SELECT count() as value
       FROM events
-      WHERE timestamp >= '{{ execution_time }}' - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}') 10 MINUTE
         AND timestamp < '{{ execution_time }}'
 ```
 
@@ -92,13 +94,15 @@ collector:
 collector:
   params:
     query: |
-      SELECT count() as value
+      SELECT
+        toStartOfDay(toDateTime('{{ period_finish }}')) as period_time,
+        count() as value
       FROM {{ table_name }}
-      WHERE date = '{{ check_date }}'
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
     query_variables:
       table_name: "events"
-      check_date: "{{ execution_time | datetime_format('%Y-%m-%d') }}"
 ```
 
 ### Time Window Queries
@@ -107,14 +111,16 @@ collector:
 ```sql
 SELECT count() as value
 FROM events
-WHERE timestamp >= now() - INTERVAL 10 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **Specific time range (for backtesting):**
 ```sql
 SELECT count() as value
 FROM events
-WHERE timestamp >= '{{ execution_time }}' - INTERVAL 10 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}') 10 MINUTE
   AND timestamp < '{{ execution_time }}'
 ```
 
@@ -132,7 +138,8 @@ WHERE toStartOfInterval(timestamp, INTERVAL 10 MINUTE) =
 ```sql
 SELECT avg(duration_ms) as value
 FROM requests
-WHERE timestamp >= now() - INTERVAL 5 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **Error rate:**
@@ -140,14 +147,16 @@ WHERE timestamp >= now() - INTERVAL 5 MINUTE
 SELECT
     countIf(status_code >= 400) / count() * 100 as value
 FROM http_requests
-WHERE timestamp >= now() - INTERVAL 1 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **95th percentile:**
 ```sql
 SELECT quantile(0.95)(response_time) as value
 FROM api_calls
-WHERE timestamp >= now() - INTERVAL 5 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **Revenue per user:**
@@ -155,7 +164,8 @@ WHERE timestamp >= now() - INTERVAL 5 MINUTE
 SELECT
     sum(amount) / countDistinct(user_id) as value
 FROM purchases
-WHERE date = today()
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 ### Using Connection Profiles
@@ -179,7 +189,13 @@ Use in metric config:
 collector:
   profile: "prod_clickhouse"
   params:
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 See [Connection Profiles Guide](profiles.md) for details.
@@ -241,9 +257,12 @@ collector:
     connection_string: "postgresql://user:password@localhost:5432/dbname"
 
     query: |
-      SELECT COUNT(*) as value
+      SELECT
+        date_trunc('minute', '{{ period_finish }}'::timestamp) as period_time,
+        COUNT(*) as value
       FROM events
-      WHERE created_at >= NOW() - INTERVAL '10 minutes'
+      WHERE created_at >= '{{ period_start }}'::timestamp
+        AND created_at < '{{ period_finish }}'::timestamp
 ```
 
 ### MySQL
@@ -255,9 +274,12 @@ collector:
     connection_string: "mysql+pymysql://user:password@localhost:3306/dbname"
 
     query: |
-      SELECT COUNT(*) as value
+      SELECT
+        DATE_ADD('{{ period_start }}', INTERVAL 10 MINUTE) as period_time,
+        COUNT(*) as value
       FROM events
-      WHERE created_at >= NOW() - INTERVAL 10 MINUTE
+      WHERE created_at >= '{{ period_start }}'
+        AND created_at < '{{ period_finish }}'
 ```
 
 ### SQLite
@@ -269,9 +291,12 @@ collector:
     connection_string: "sqlite:///path/to/database.db"
 
     query: |
-      SELECT COUNT(*) as value
+      SELECT
+        datetime('{{ period_start }}', '+10 minutes') as period_time,
+        COUNT(*) as value
       FROM events
-      WHERE created_at >= datetime('now', '-10 minutes')
+      WHERE created_at >= datetime('{{ period_start }}')
+        AND created_at < datetime('{{ period_finish }}')
 ```
 
 ### Using Profiles
@@ -389,7 +414,8 @@ SELECT value FROM single_row_table WHERE id = 1
 
 ```sql
 -- ✓ GOOD - explicit time range
-WHERE timestamp >= now() - INTERVAL 10 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 -- ✗ BAD - unbounded query
 WHERE status = 'active'
@@ -411,7 +437,8 @@ CREATE INDEX idx_events_created_at ON events(created_at);
 
 ```bash
 # ClickHouse
-EXPLAIN SYNTAX SELECT count() as value FROM events WHERE timestamp >= now() - INTERVAL 10 MINUTE;
+EXPLAIN SYNTAX SELECT count() as value FROM events WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}');
 
 # PostgreSQL
 EXPLAIN ANALYZE SELECT COUNT(*) as value FROM events WHERE created_at >= NOW() - INTERVAL '10 minutes';
@@ -427,7 +454,8 @@ Don't hardcode credentials in metric configs. Use `detectk_profiles.yaml`.
 -- ClickHouse - use server timezone
 SELECT count() as value
 FROM events
-WHERE timestamp >= now() - INTERVAL 10 MINUTE
+WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 -- PostgreSQL - explicit timezone
 SELECT COUNT(*) as value

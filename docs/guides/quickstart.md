@@ -94,7 +94,8 @@ collector:
     query: |
       SELECT count(DISTINCT user_id) as value
       FROM sessions
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "threshold"
@@ -192,7 +193,8 @@ collector:
     query: |
       SELECT count(DISTINCT user_id) as value
       FROM sessions
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "mad"  # Median Absolute Deviation - robust to outliers
@@ -254,7 +256,13 @@ name: "sessions_with_profile"
 collector:
   profile: "prod_clickhouse"  # ← Reference profile
   params:
-    query: "SELECT count() as value FROM sessions"
+    query: |
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 10 MINUTE) as period_time,
+        count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "threshold"

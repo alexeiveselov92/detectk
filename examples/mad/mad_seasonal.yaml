@@ -17,7 +17,8 @@ collector:
         toHour(now()) as hour_of_day,
         toDayOfWeek(now()) as day_of_week
       FROM sessions
-      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # Store seasonal features in context
 # These will be saved to dtk_datapoints.context column (JSONB)

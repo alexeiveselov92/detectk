@@ -19,9 +19,12 @@ collector:
     port: 9000
     database: "analytics"
     query: |
-      SELECT sum(amount) as value
+      SELECT
+        toStartOfInterval(toDateTime('{{ period_finish }}'), INTERVAL 1 HOUR) as period_time,
+        sum(amount) as value
       FROM transactions
-      WHERE timestamp >= now() - INTERVAL 1 HOUR
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 storage:
   enabled: true

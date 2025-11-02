@@ -16,7 +16,10 @@ collector:
     database: "analytics"
     user: "detectk"
     password: "hardcoded_password_bad!"  # ❌ Security risk
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT count() as value FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # metric2.yaml - same credentials repeated
 collector:
@@ -27,7 +30,10 @@ collector:
     database: "analytics"
     user: "detectk"
     password: "hardcoded_password_bad!"  # ❌ Same password again
-    query: "SELECT count() as value FROM purchases"
+    query: |
+      SELECT count() as value FROM purchases
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **With profiles** (DRY, secure):
@@ -47,13 +53,19 @@ profiles:
 collector:
   profile: "prod_clickhouse"  # ✓ Reference profile
   params:
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT count() as value FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # metric2.yaml
 collector:
   profile: "prod_clickhouse"  # ✓ Same profile
   params:
-    query: "SELECT count() as value FROM purchases"
+    query: |
+      SELECT count() as value FROM purchases
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **Benefits:**
@@ -136,7 +148,10 @@ name: "sessions_10min"
 collector:
   profile: "prod_clickhouse"  # Reference profile by name
   params:
-    query: "SELECT count() as value FROM sessions"
+    query: |
+      SELECT count() as value FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 detector:
   type: "mad"
@@ -163,7 +178,10 @@ collector:
   profile: "prod_clickhouse"
   params:
     database: "analytics_v2"  # Override database from profile
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT count() as value FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 **Merged result:**
@@ -180,7 +198,10 @@ Mix profile with inline params:
 collector:
   profile: "prod_clickhouse"
   params:
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT count() as value FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 
 # Use inline connection for storage (different DB)
 storage:
@@ -315,7 +336,10 @@ profiles:
 collector:
   profile: "${DETECTK_ENV:-dev}"  # Default to dev, override with env var
   params:
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT count() as value FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 ```bash
@@ -505,7 +529,10 @@ collector:
 collector:
   profile: "prod_clickhouse"
   params:
-    query: "SELECT count() as value FROM events"
+    query: |
+      SELECT count() as value FROM events
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
 ```
 
 ## Advanced: Profile Validation
