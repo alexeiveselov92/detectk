@@ -349,22 +349,29 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
     click.echo("📊 DetectK Metrics:")
     click.echo()
 
-    # Common directory names to search
-    search_dirs = []
-    for dir_name in ["metrics", "configs", "."]:
-        candidate = path / dir_name if dir_name != "." else path
-        if candidate.exists() and candidate.is_dir():
-            search_dirs.append(candidate)
+    # Strict structure: all metrics must be in "metrics/" directory
+    # (like dbt's "models/" directory)
+    metrics_dir = path / "metrics"
 
-    # Find all .yaml files
+    if not metrics_dir.exists():
+        click.echo("  ❌ No 'metrics/' directory found")
+        click.echo(f"  Expected location: {metrics_dir}")
+        click.echo()
+        click.echo("  💡 Initialize a DetectK project with:")
+        click.echo("     dtk init-project")
+        return
+
+    # Find all .yaml files recursively in metrics/ directory
     yaml_files = []
-    for search_dir in search_dirs:
-        yaml_files.extend(search_dir.glob("**/*.yaml"))
-        yaml_files.extend(search_dir.glob("**/*.yml"))
+    yaml_files.extend(metrics_dir.glob("**/*.yaml"))
+    yaml_files.extend(metrics_dir.glob("**/*.yml"))
 
     if not yaml_files:
-        click.echo("  No metric configuration files found")
-        click.echo(f"  Searched in: {path}")
+        click.echo("  No metric configuration files found in metrics/")
+        click.echo(f"  Directory: {metrics_dir}")
+        click.echo()
+        click.echo("  💡 Create a metric config:")
+        click.echo("     dtk init metrics/my_metric.yaml")
         return
 
     # Load and display metrics
@@ -390,10 +397,13 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
             metrics_found += 1
 
             # Display metric
+            # Show path relative to metrics/ directory (not project root)
+            rel_path = yaml_file.relative_to(metrics_dir)
+
             if details:
                 click.echo("─" * 70)
                 click.echo(f"📌 {config.name}")
-                click.echo(f"   File: {yaml_file.relative_to(path)}")
+                click.echo(f"   File: metrics/{rel_path}")
                 if config.description:
                     click.echo(f"   Description: {config.description}")
                 click.echo(f"   Collector: {config.collector.type}")
@@ -425,7 +435,7 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
             else:
                 # Simple format
                 collector_info = f"[{config.collector.type}]"
-                file_path = str(yaml_file.relative_to(path))
+                file_path = f"metrics/{rel_path}"
                 status = "✅" if validate else ""
 
                 if validate:
@@ -435,14 +445,16 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
 
         except ConfigurationError as e:
             # Configuration error - show in output
+            rel_path = yaml_file.relative_to(metrics_dir)
+
             if details:
                 click.echo("─" * 70)
                 click.echo(f"📌 {yaml_file.name}")
-                click.echo(f"   File: {yaml_file.relative_to(path)}")
+                click.echo(f"   File: metrics/{rel_path}")
                 click.echo(f"   Status: ❌ Invalid - {e}")
                 click.echo()
             else:
-                file_path = str(yaml_file.relative_to(path))
+                file_path = f"metrics/{rel_path}"
                 click.echo(f"  ❌ {yaml_file.stem:30s} {'[error]':15s} {file_path}")
 
             metrics_found += 1

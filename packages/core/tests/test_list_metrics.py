@@ -11,21 +11,39 @@ from detectk.cli.main import cli
 class TestListMetricsCommand:
     """Test suite for list-metrics CLI command."""
 
-    def test_list_metrics_empty_directory(self):
-        """Test listing metrics in empty directory."""
+    def test_list_metrics_no_metrics_directory(self):
+        """Test listing metrics when no metrics/ directory exists."""
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir])
 
             assert result.exit_code == 0
-            assert "No metric configuration files found" in result.output
+            assert "No 'metrics/' directory found" in result.output
+            assert "dtk init-project" in result.output
+
+    def test_list_metrics_empty_metrics_directory(self):
+        """Test listing metrics in empty metrics/ directory."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create empty metrics/ directory
+            (Path(tmpdir) / "metrics").mkdir()
+
+            result = runner.invoke(cli, ["list-metrics", "--path", tmpdir])
+
+            assert result.exit_code == 0
+            assert "No metric configuration files found in metrics/" in result.output
 
     def test_list_metrics_single_metric(self):
         """Test listing a single metric."""
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            # Create metrics/ directory
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             # Create a simple metric config
             config_content = """name: "test_metric"
 description: "Test metric for CLI"
@@ -50,7 +68,7 @@ alerter:
 storage:
   enabled: false
 """
-            config_path = Path(tmpdir) / "test_metric.yaml"
+            config_path = metrics_dir / "test_metric.yaml"
             config_path.write_text(config_content)
 
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir])
@@ -58,7 +76,7 @@ storage:
             assert result.exit_code == 0
             assert "test_metric" in result.output
             assert "[clickhouse]" in result.output
-            assert "test_metric.yaml" in result.output
+            assert "metrics/test_metric.yaml" in result.output
             assert "Total: 1 metrics found" in result.output
 
     def test_list_metrics_with_details(self):
@@ -66,6 +84,9 @@ storage:
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             config_content = """name: "detailed_metric"
 description: "Metric with details"
 
@@ -92,7 +113,7 @@ storage:
   params:
     connection_string: "postgresql://localhost/metrics"
 """
-            config_path = Path(tmpdir) / "detailed.yaml"
+            config_path = metrics_dir / "detailed.yaml"
             config_path.write_text(config_content)
 
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir, "--details"])
@@ -110,6 +131,9 @@ storage:
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             # Create valid metric
             valid_config = """name: "valid_metric"
 collector:
@@ -126,7 +150,7 @@ alerter:
   params:
     webhook_url: "http://test"
 """
-            (Path(tmpdir) / "valid.yaml").write_text(valid_config)
+            (metrics_dir / "valid.yaml").write_text(valid_config)
 
             # Create invalid metric (missing required fields)
             invalid_config = """name: "invalid_metric"
@@ -134,7 +158,7 @@ collector:
   type: "clickhouse"
 # Missing detector and alerter
 """
-            (Path(tmpdir) / "invalid.yaml").write_text(invalid_config)
+            (metrics_dir / "invalid.yaml").write_text(invalid_config)
 
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir, "--validate"])
 
@@ -149,6 +173,9 @@ collector:
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             # Create ClickHouse metric
             clickhouse_config = """name: "ch_metric"
 collector:
@@ -164,7 +191,7 @@ alerter:
   params:
     webhook_url: "http://test"
 """
-            (Path(tmpdir) / "ch_metric.yaml").write_text(clickhouse_config)
+            (metrics_dir / "ch_metric.yaml").write_text(clickhouse_config)
 
             # Create SQL metric
             sql_config = """name: "sql_metric"
@@ -182,7 +209,7 @@ alerter:
   params:
     webhook_url: "http://test"
 """
-            (Path(tmpdir) / "sql_metric.yaml").write_text(sql_config)
+            (metrics_dir / "sql_metric.yaml").write_text(sql_config)
 
             # Filter by clickhouse
             result = runner.invoke(
@@ -200,6 +227,9 @@ alerter:
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             config_content = """name: "multi_detector"
 collector:
   type: "clickhouse"
@@ -219,7 +249,7 @@ alerter:
   params:
     webhook_url: "http://test"
 """
-            (Path(tmpdir) / "multi.yaml").write_text(config_content)
+            (metrics_dir / "multi.yaml").write_text(config_content)
 
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir, "--details"])
 
@@ -233,6 +263,9 @@ alerter:
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             # Config with required environment variable
             config_content = """name: "env_var_metric"
 collector:
@@ -249,7 +282,7 @@ alerter:
   params:
     webhook_url: "${REQUIRED_WEBHOOK}"  # No default
 """
-            (Path(tmpdir) / "env_metric.yaml").write_text(config_content)
+            (metrics_dir / "env_metric.yaml").write_text(config_content)
 
             # Should work in lenient mode (list-metrics uses lenient=True)
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir])
@@ -263,6 +296,9 @@ alerter:
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_dir = Path(tmpdir) / "metrics"
+            metrics_dir.mkdir()
+
             # Create regular metric
             regular_config = """name: "regular"
 collector:
@@ -278,7 +314,7 @@ alerter:
   params:
     webhook_url: "http://test"
 """
-            (Path(tmpdir) / "regular.yaml").write_text(regular_config)
+            (metrics_dir / "regular.yaml").write_text(regular_config)
 
             # Create template file (should be skipped)
             template_config = """name: "template"
@@ -287,7 +323,7 @@ collector:
   params:
     query: "SELECT 1"
 """
-            (Path(tmpdir) / "template.yaml.template").write_text(template_config)
+            (metrics_dir / "template.yaml.template").write_text(template_config)
 
             result = runner.invoke(cli, ["list-metrics", "--path", tmpdir])
 
@@ -303,9 +339,11 @@ collector:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
 
-            # Create nested structure
-            (tmpdir / "metrics").mkdir()
-            (tmpdir / "metrics" / "production").mkdir()
+            # Create nested structure within metrics/
+            metrics_dir = tmpdir / "metrics"
+            metrics_dir.mkdir()
+            production_dir = metrics_dir / "production"
+            production_dir.mkdir()
 
             config = """name: "nested_metric"
 collector:
@@ -321,7 +359,7 @@ alerter:
   params:
     webhook_url: "http://test"
 """
-            (tmpdir / "metrics" / "production" / "nested.yaml").write_text(config)
+            (production_dir / "nested.yaml").write_text(config)
 
             result = runner.invoke(cli, ["list-metrics", "--path", str(tmpdir)])
 
