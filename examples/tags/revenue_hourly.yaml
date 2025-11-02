@@ -1,0 +1,68 @@
+# Example: Revenue metric with tags for filtering
+
+name: "revenue_hourly"
+description: "Monitor hourly revenue - critical business metric"
+
+# Tags for grouping and filtering
+tags:
+  - "critical"      # High priority metrics
+  - "revenue"       # Revenue-related metrics
+  - "hourly"        # Hourly check interval
+  - "business"      # Business KPIs
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT
+        toStartOfHour(timestamp) AS period_time,
+        sum(amount_usd) AS value
+      FROM orders
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+        AND status = 'paid'
+      GROUP BY period_time
+      ORDER BY period_time
+
+    timestamp_column: "period_time"
+    value_column: "value"
+
+# Anomaly Detection
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+
+# Alert Delivery
+alerter:
+  enabled: true
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+# Storage
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "metrics"
+
+# Schedule
+schedule:
+  interval: "1 hour"
+
+# Metadata
+metadata:
+  team: "finance"
+  priority: "P0"
+  dashboards:
+    - "https://grafana.example.com/d/revenue"
+  runbook: "https://wiki.example.com/runbooks/revenue"

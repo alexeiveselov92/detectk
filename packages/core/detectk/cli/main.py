@@ -323,7 +323,25 @@ def list_alerters() -> None:
     "-c",
     help="Filter by collector type (e.g., clickhouse, sql, http)",
 )
-def list_metrics(path: Path, details: bool, validate: bool, collector: str | None) -> None:
+@click.option(
+    "--tags",
+    "-t",
+    multiple=True,
+    help="Filter by tags (can be used multiple times)",
+)
+@click.option(
+    "--match-all-tags",
+    is_flag=True,
+    help="Require ALL specified tags to match (default: match ANY tag)",
+)
+def list_metrics(
+    path: Path,
+    details: bool,
+    validate: bool,
+    collector: str | None,
+    tags: tuple[str, ...],
+    match_all_tags: bool,
+) -> None:
     """List all metric configurations in the project.
 
     Scans directories for .yaml files and displays configured metrics.
@@ -393,6 +411,22 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
                 metrics_filtered += 1
                 continue
 
+            # Filter by tags if specified
+            if tags:
+                metric_tags_set = set(config.tags) if config.tags else set()
+                required_tags_set = set(tags)
+
+                if match_all_tags:
+                    # ALL tags must match
+                    if not required_tags_set.issubset(metric_tags_set):
+                        metrics_filtered += 1
+                        continue
+                else:
+                    # ANY tag must match
+                    if not (required_tags_set & metric_tags_set):
+                        metrics_filtered += 1
+                        continue
+
             metrics_found += 1
 
             # Display metric
@@ -426,6 +460,11 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
                 )
                 click.echo(f"   Storage: {storage_info}")
 
+                # Tags
+                if config.tags:
+                    tags_str = ", ".join(config.tags)
+                    click.echo(f"   Tags: {tags_str}")
+
                 if validate:
                     click.echo("   Status: ✅ Valid")
                     metrics_valid += 1
@@ -434,13 +473,18 @@ def list_metrics(path: Path, details: bool, validate: bool, collector: str | Non
             else:
                 # Simple format
                 collector_info = f"[{config.collector.type}]"
+                tags_info = f"[{', '.join(config.tags)}]" if config.tags else ""
                 file_path = f"metrics/{rel_path}"
                 status = "✅" if validate else ""
 
                 if validate:
                     metrics_valid += 1
 
-                click.echo(f"  {status} {config.name:30s} {collector_info:15s} {file_path}")
+                # Format output with tags
+                if tags_info:
+                    click.echo(f"  {status} {config.name:30s} {collector_info:15s} {tags_info:30s} {file_path}")
+                else:
+                    click.echo(f"  {status} {config.name:30s} {collector_info:15s} {file_path}")
 
         except ConfigurationError as e:
             # Configuration error - show in output
@@ -876,6 +920,224 @@ def init_project(
     except Exception as e:
         click.echo(f"❌ Error creating project: {e}", err=True)
         logger.exception("Project initialization failed")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("directory", type=click.Path(exists=True, path_type=Path), default=".")
+@click.option(
+    "--tags",
+    "-t",
+    multiple=True,
+    help="Run only metrics with specified tags (can be used multiple times)",
+)
+@click.option(
+    "--exclude-tags",
+    "-e",
+    multiple=True,
+    help="Exclude metrics with specified tags (can be used multiple times)",
+)
+@click.option(
+    "--match-all",
+    is_flag=True,
+    help="Require ALL specified tags to match (default: match ANY tag)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would run without actually running",
+)
+@click.option(
+    "--parallel",
+    "-p",
+    is_flag=True,
+    help="Run metrics in parallel (experimental)",
+)
+def run_tagged(
+    directory: Path,
+    tags: tuple[str, ...],
+    exclude_tags: tuple[str, ...],
+    match_all: bool,
+    dry_run: bool,
+    parallel: bool,
+) -> None:
+    """Run multiple metrics filtered by tags.
+
+    DIRECTORY: Directory to search for metric configs (default: current directory)
+
+    \b
+    Examples:
+        # Run all metrics tagged with 'critical'
+        dtk run-tagged --tags critical
+
+        # Run metrics with 'revenue' OR 'orders' tags
+        dtk run-tagged --tags revenue --tags orders
+
+        # Run metrics with BOTH 'hourly' AND 'critical' tags
+        dtk run-tagged --tags hourly --tags critical --match-all
+
+        # Run all except 'experimental' metrics
+        dtk run-tagged --exclude-tags experimental
+
+        # Dry run to see what would be executed
+        dtk run-tagged --tags critical --dry-run
+
+        # Run in parallel (experimental)
+        dtk run-tagged --tags critical --parallel
+    """
+    try:
+        if not tags and not exclude_tags:
+            click.echo("❌ Error: Specify at least one tag with --tags or --exclude-tags", err=True)
+            sys.exit(1)
+
+        # Find all YAML files
+        yaml_files = list(directory.rglob("*.yaml")) + list(directory.rglob("*.yml"))
+
+        if not yaml_files:
+            click.echo(f"⚠️  No YAML files found in {directory}")
+            sys.exit(0)
+
+        # Load and filter configs by tags
+        loader = ConfigLoader()
+        matched_configs: list[tuple[Path, Any]] = []
+
+        click.echo(f"🔍 Searching for metrics in {directory}")
+        click.echo(f"   Tags: {', '.join(tags) if tags else '(none)'}")
+        if exclude_tags:
+            click.echo(f"   Exclude: {', '.join(exclude_tags)}")
+        click.echo(f"   Match mode: {'ALL tags' if match_all else 'ANY tag'}")
+        click.echo()
+
+        for yaml_file in yaml_files:
+            try:
+                config = loader.load(str(yaml_file))
+
+                # Check exclude tags first
+                if exclude_tags:
+                    metric_tags_set = set(config.tags) if config.tags else set()
+                    if metric_tags_set & set(exclude_tags):  # Intersection
+                        logger.debug(f"Excluding {yaml_file.name}: has excluded tag")
+                        continue
+
+                # Check include tags
+                if tags:
+                    metric_tags_set = set(config.tags) if config.tags else set()
+                    required_tags_set = set(tags)
+
+                    if match_all:
+                        # ALL tags must match
+                        if not required_tags_set.issubset(metric_tags_set):
+                            continue
+                    else:
+                        # ANY tag must match
+                        if not (required_tags_set & metric_tags_set):
+                            continue
+
+                matched_configs.append((yaml_file, config))
+
+            except ConfigurationError as e:
+                logger.debug(f"Skipping invalid config {yaml_file}: {e}")
+                continue
+            except Exception as e:
+                logger.debug(f"Skipping {yaml_file}: {e}")
+                continue
+
+        if not matched_configs:
+            click.echo("⚠️  No metrics matched the tag filter")
+            sys.exit(0)
+
+        # Display matched metrics
+        click.echo(f"📊 Found {len(matched_configs)} matching metric(s):")
+        click.echo()
+        for yaml_file, config in matched_configs:
+            tags_str = f"[{', '.join(config.tags)}]" if config.tags else "[no tags]"
+            click.echo(f"  ✓ {config.name:30s} {tags_str}")
+            click.echo(f"    {yaml_file}")
+
+        if dry_run:
+            click.echo()
+            click.echo("🏃 Dry run mode - no metrics were executed")
+            sys.exit(0)
+
+        # Execute metrics
+        click.echo()
+        click.echo("=" * 70)
+        click.echo("EXECUTING METRICS")
+        click.echo("=" * 70)
+        click.echo()
+
+        checker = MetricCheck()
+        success_count = 0
+        error_count = 0
+        results: list[tuple[str, Any, list[str]]] = []
+
+        if parallel:
+            click.echo("⚡ Parallel execution mode (experimental)")
+            click.echo()
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_to_config = {
+                    executor.submit(checker.execute, str(yaml_file)): (yaml_file, config)
+                    for yaml_file, config in matched_configs
+                }
+
+                for future in concurrent.futures.as_completed(future_to_config):
+                    yaml_file, config = future_to_config[future]
+                    try:
+                        result = future.result()
+                        results.append((config.name, result, []))
+                        success_count += 1
+                        click.echo(f"✅ {config.name}")
+                    except Exception as e:
+                        results.append((config.name, None, [str(e)]))
+                        error_count += 1
+                        click.echo(f"❌ {config.name}: {e}")
+        else:
+            # Sequential execution
+            for yaml_file, config in matched_configs:
+                click.echo(f"Running: {config.name}")
+                try:
+                    result = checker.execute(str(yaml_file))
+                    results.append((config.name, result, result.errors if result.errors else []))
+
+                    if result.errors:
+                        error_count += 1
+                        click.echo(f"  ⚠️  Completed with errors")
+                        for error in result.errors:
+                            click.echo(f"     - {error}")
+                    else:
+                        success_count += 1
+                        click.echo(f"  ✅ Success")
+
+                    if result.alert_sent:
+                        click.echo(f"  ✉️  Alert sent: {result.alert_reason}")
+
+                except Exception as e:
+                    error_count += 1
+                    results.append((config.name, None, [str(e)]))
+                    click.echo(f"  ❌ Failed: {e}")
+
+                click.echo()
+
+        # Summary
+        click.echo("=" * 70)
+        click.echo("SUMMARY")
+        click.echo("=" * 70)
+        click.echo(f"Total metrics: {len(matched_configs)}")
+        click.echo(f"Success: {success_count}")
+        click.echo(f"Errors: {error_count}")
+        click.echo()
+
+        if error_count > 0:
+            click.echo("⚠️  Some metrics failed")
+            sys.exit(1)
+        else:
+            click.echo("✅ All metrics completed successfully")
+
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        logger.exception("run-tagged failed")
         sys.exit(1)
 
 

@@ -516,6 +516,11 @@ class MetricConfig(BaseModel):
         description="Additional arbitrary metadata"
     )
 
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Tags for grouping and filtering metrics (e.g., ['critical', 'revenue', 'hourly'])"
+    )
+
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:

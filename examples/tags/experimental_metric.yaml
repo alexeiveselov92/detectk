@@ -1,0 +1,55 @@
+# Example: Experimental metric (excluded from production runs)
+
+name: "experimental_conversion_rate"
+description: "Testing new conversion rate calculation"
+
+# Tags
+tags:
+  - "experimental"  # Not ready for production
+  - "conversion"    # Conversion metrics
+  - "testing"       # Under development
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    query: |
+      SELECT
+        toDate(timestamp) AS period_time,
+        countIf(converted = 1) * 100.0 / count() AS value
+      FROM user_journeys
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
+
+    timestamp_column: "period_time"
+    value_column: "value"
+
+# Anomaly Detection
+detector:
+  type: "threshold"
+  params:
+    operator: "less_than"
+    threshold: 5.0  # Alert if conversion < 5%
+
+# Alert Delivery (disabled for experimental)
+alerter:
+  enabled: false
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+
+# Storage
+storage:
+  enabled: true
+
+# Schedule
+schedule:
+  interval: "1 day"
+
+metadata:
+  team: "analytics"
+  priority: "P3"
+  note: "Experimental - do not use in production"

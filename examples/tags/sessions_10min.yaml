@@ -1,0 +1,55 @@
+# Example: User sessions with tags
+
+name: "sessions_10min"
+description: "Monitor active user sessions"
+
+# Tags
+tags:
+  - "sessions"      # Session metrics
+  - "realtime"      # 10-minute interval
+  - "product"       # Product metrics
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    query: |
+      SELECT
+        toStartOfInterval(timestamp, INTERVAL 10 minute) AS period_time,
+        count(DISTINCT user_id) AS value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
+
+    timestamp_column: "period_time"
+    value_column: "value"
+
+# Anomaly Detection
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+
+# Alert Delivery
+alerter:
+  enabled: true
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 60
+
+# Storage
+storage:
+  enabled: true
+
+# Schedule
+schedule:
+  interval: "10 minutes"
+
+metadata:
+  team: "product"
+  priority: "P1"

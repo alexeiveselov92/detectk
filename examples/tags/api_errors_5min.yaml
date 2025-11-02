@@ -1,0 +1,56 @@
+# Example: API errors with tags
+
+name: "api_errors_5min"
+description: "Monitor API error rate every 5 minutes"
+
+# Tags
+tags:
+  - "critical"      # High priority
+  - "api"           # API metrics
+  - "errors"        # Error monitoring
+  - "realtime"      # 5-minute interval
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    query: |
+      SELECT
+        toStartOfInterval(timestamp, INTERVAL 5 minute) AS period_time,
+        countIf(status_code >= 500) * 100.0 / count() AS value
+      FROM api_logs
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
+
+    timestamp_column: "period_time"
+    value_column: "value"
+
+# Anomaly Detection
+detector:
+  type: "threshold"
+  params:
+    operator: "greater_than"
+    threshold: 1.0  # Alert if error rate > 1%
+
+# Alert Delivery
+alerter:
+  enabled: true
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 30
+
+# Storage
+storage:
+  enabled: true
+
+# Schedule
+schedule:
+  interval: "5 minutes"
+
+metadata:
+  team: "platform"
+  priority: "P0"
