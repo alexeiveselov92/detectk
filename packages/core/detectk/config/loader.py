@@ -185,10 +185,13 @@ class ConfigLoader:
     ) -> dict[str, Any]:
         """Parse YAML with environment variable substitution and templating.
 
+        IMPORTANT: collector.params.query is NOT rendered here!
+        It will be rendered by collector on each collect_bulk() call.
+
         Processing order:
         1. Environment variable substitution (${VAR_NAME})
-        2. Jinja2 template rendering ({{ execution_time }})
-        3. YAML parsing
+        2. YAML parsing (NO rendering - preserves {{ period_start }} in queries)
+        3. Selective Jinja2 rendering via _process_dict_templates()
 
         Args:
             yaml_content: Raw YAML content as string
@@ -201,27 +204,22 @@ class ConfigLoader:
         Raises:
             ConfigurationError: If parsing or substitution fails
         """
-        # Step 1: Environment variable substitution
+        # Step 1: Environment variable substitution (only ${VAR_NAME}, not {{ }})
         content_with_env = self._substitute_env_vars(yaml_content, lenient=lenient)
 
-        # Step 2: Jinja2 template rendering (if context provided)
-        if template_context:
-            try:
-                template = self.jinja_env.from_string(content_with_env)
-                content_rendered = template.render(**template_context)
-            except TemplateError as e:
-                raise ConfigurationError(f"Jinja2 template rendering failed: {e}")
-        else:
-            content_rendered = content_with_env
-
-        # Step 3: Parse YAML
+        # Step 2: Parse YAML WITHOUT rendering Jinja2 templates
+        # This preserves {{ period_start }}, {{ period_finish }} in queries
         try:
-            config_dict = yaml.safe_load(content_rendered)
+            config_dict = yaml.safe_load(content_with_env)
         except yaml.YAMLError as e:
             raise ConfigurationError(f"YAML parsing failed: {e}")
 
         if not isinstance(config_dict, dict):
             raise ConfigurationError("Configuration must be a YAML mapping (dict)")
+
+        # Step 3: Selectively render Jinja2 templates (skips collector.params.query)
+        if template_context:
+            config_dict = self._process_dict_templates(config_dict, template_context)
 
         return config_dict
 
@@ -291,27 +289,41 @@ class ConfigLoader:
         self,
         data: dict[str, Any] | list[Any] | Any,
         template_context: dict[str, Any],
+        path: str = "",
     ) -> dict[str, Any] | list[Any] | Any:
         """Recursively process Jinja2 templates in dictionary values.
+
+        IMPORTANT: Skips rendering collector.params.query field!
+        This is critical - collector queries must be rendered by the collector
+        itself on each collect_bulk() call with dynamic period_start/period_finish.
 
         Args:
             data: Data structure to process (dict, list, or primitive)
             template_context: Context for template rendering
+            path: Current path in dict (for detecting collector.params.query)
 
         Returns:
             Processed data structure with rendered templates
         """
         if isinstance(data, dict):
             return {
-                key: self._process_dict_templates(value, template_context)
+                key: self._process_dict_templates(
+                    value,
+                    template_context,
+                    path=f"{path}.{key}" if path else key
+                )
                 for key, value in data.items()
             }
         elif isinstance(data, list):
             return [
-                self._process_dict_templates(item, template_context)
-                for item in data
+                self._process_dict_templates(item, template_context, path=f"{path}[{i}]")
+                for i, item in enumerate(data)
             ]
         elif isinstance(data, str):
+            # Skip rendering collector.params.query - collector will render it
+            if path == "collector.params.query":
+                return data  # Leave {{ period_start }}, {{ period_finish }} intact
+
             # Render string as Jinja2 template if it contains template syntax
             if "{{" in data or "{%" in data:
                 try:
