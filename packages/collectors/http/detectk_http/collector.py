@@ -144,19 +144,31 @@ class HTTPCollector(BaseCollector):
                 config_path="collector.params.method",
             )
 
-    def collect(self, at_time: datetime | None = None) -> DataPoint:
+    def collect_bulk(
+        self,
+        period_start: datetime,
+        period_finish: datetime,
+    ) -> list[DataPoint]:
         """Collect metric value from HTTP endpoint.
 
+        Note: Most HTTP APIs return current/latest value, not time series.
+        This method returns a single datapoint with timestamp = period_finish.
+
+        For time series HTTP APIs, the collector can be extended to parse
+        multiple datapoints from the response.
+
         Args:
-            at_time: Time to collect for (for backtesting support)
+            period_start: Start of time range (for time series APIs)
+            period_finish: End of time range (used as timestamp)
 
         Returns:
-            DataPoint with timestamp and value
+            List with single DataPoint (timestamp = period_finish)
 
         Raises:
             CollectionError: If HTTP request fails or response parsing fails
         """
-        at_time = at_time or datetime.now()
+        # Use period_finish as collection timestamp
+        collection_time = period_finish
 
         # Retry logic
         last_error = None
@@ -190,8 +202,8 @@ class HTTPCollector(BaseCollector):
 
                 logger.debug(f"Collected value: {value}")
 
-                return DataPoint(
-                    timestamp=at_time,
+                return [DataPoint(
+                    timestamp=collection_time,
                     value=value,
                     is_missing=False,
                     metadata={
@@ -199,7 +211,7 @@ class HTTPCollector(BaseCollector):
                         "url": self.url,
                         "status_code": response.status_code,
                     },
-                )
+                )]
 
             except RequestException as e:
                 last_error = e

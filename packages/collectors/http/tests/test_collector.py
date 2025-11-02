@@ -1,6 +1,6 @@
 """Tests for HTTPCollector."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 import requests_mock
@@ -86,7 +86,10 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/count", text="42.5")
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 42.5
         assert isinstance(datapoint.timestamp, datetime)
@@ -106,7 +109,10 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/metrics", json={"count": 123})
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 123.0
 
@@ -125,7 +131,10 @@ class TestHTTPCollector:
         )
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 456.0
 
@@ -144,7 +153,10 @@ class TestHTTPCollector:
         )
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 789.0
 
@@ -168,7 +180,10 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/secure", text=check_headers)
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 100.0
 
@@ -188,7 +203,10 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/query", text=check_params)
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 75.5
 
@@ -210,7 +228,10 @@ class TestHTTPCollector:
         requests_mock.post("http://api.example.com/query", json=check_json_body)
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 999.0
 
@@ -227,7 +248,10 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/export.csv", text=csv_data)
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 42.0  # First row
 
@@ -243,12 +267,15 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/export.csv", text=csv_data)
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 50.0  # Second row
 
     def test_collect_with_at_time(self, requests_mock):
-        """Test collection with specific at_time."""
+        """Test collection with specific period_finish timestamp."""
         config = {
             "url": "http://api.example.com/count",
             "response_format": "text",
@@ -257,10 +284,12 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/count", text="100")
 
         collector = HTTPCollector(config)
-        at_time = datetime(2024, 11, 1, 12, 0, 0)
-        datapoint = collector.collect(at_time=at_time)
+        period_finish = datetime(2024, 11, 1, 12, 0, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
-        assert datapoint.timestamp == at_time
+        assert datapoint.timestamp == period_finish
 
     def test_http_error_with_retry(self, requests_mock):
         """Test HTTP error with retry logic."""
@@ -280,7 +309,10 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/unstable", responses)
 
         collector = HTTPCollector(config)
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
 
         assert datapoint.value == 42.0
         assert requests_mock.call_count == 3  # 2 failures + 1 success
@@ -298,9 +330,11 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/broken", status_code=500)
 
         collector = HTTPCollector(config)
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
 
         with pytest.raises(CollectionError, match="failed after 2 attempts"):
-            collector.collect()
+            collector.collect_bulk(period_start, period_finish)
 
         assert requests_mock.call_count == 2
 
@@ -315,9 +349,11 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/metrics", json={"count": 123})
 
         collector = HTTPCollector(config)
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
 
         with pytest.raises(CollectionError, match="Failed to extract value"):
-            collector.collect()
+            collector.collect_bulk(period_start, period_finish)
 
     def test_invalid_numeric_value(self, requests_mock):
         """Test error handling for non-numeric text response."""
@@ -329,9 +365,11 @@ class TestHTTPCollector:
         requests_mock.get("http://api.example.com/bad", text="not_a_number")
 
         collector = HTTPCollector(config)
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
 
         with pytest.raises(CollectionError, match="Failed to extract value"):
-            collector.collect()
+            collector.collect_bulk(period_start, period_finish)
 
     def test_close(self, requests_mock):
         """Test that close() disposes session."""
@@ -345,7 +383,9 @@ class TestHTTPCollector:
         collector = HTTPCollector(config)
 
         # Trigger request
-        collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        collector.collect_bulk(period_start, period_finish)
         assert collector.session is not None
 
         # Close
@@ -366,9 +406,11 @@ class TestHTTPCollectorEdgeCases:
         requests_mock.get("http://api.example.com/empty", text="")
 
         collector = HTTPCollector(config)
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
 
         with pytest.raises(CollectionError):
-            collector.collect()
+            collector.collect_bulk(period_start, period_finish)
 
     def test_timeout_configuration(self):
         """Test custom timeout configuration."""
@@ -394,5 +436,8 @@ class TestHTTPCollectorEdgeCases:
         collector = HTTPCollector(config)
         assert collector.verify_ssl is False
 
-        datapoint = collector.collect()
+        period_finish = datetime(2024, 11, 2, 14, 30, 0)
+        period_start = period_finish - timedelta(minutes=10)
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        datapoint = datapoints[0]
         assert datapoint.value == 100.0
