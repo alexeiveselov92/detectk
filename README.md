@@ -377,12 +377,20 @@ See [TODO.md](TODO.md) for detailed roadmap (internal).
 
 ## Documentation
 
-- **Quick Start** (this README)
+### User Guides
+- **[INSTALLATION.md](INSTALLATION.md)** - Complete installation guide
+- **[QUICKSTART.md](QUICKSTART.md)** - 5-minute tutorial
+- **[CONFIGURATION.md](CONFIGURATION.md)** - Complete configuration reference
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment guide
+- **[ORCHESTRATORS.md](ORCHESTRATORS.md)** - Prefect and Airflow integration
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
+- **[examples/](examples/)** - 37+ working configurations
+
+### Developer Documentation
 - **[DECISIONS.md](DECISIONS.md)** - Architectural decisions with rationale
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development standards and guidelines
-- **Architecture Guide** - Design details (internal: ARCHITECTURE.md)
-- **Configuration Reference** - Complete YAML schema (coming soon)
-- **API Documentation** - Auto-generated from docstrings (coming soon)
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Technical architecture (internal)
+- **[TODO.md](TODO.md)** - Development roadmap (internal)
 
 ---
 
