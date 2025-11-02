@@ -11,6 +11,7 @@ from typing import Any
 import click
 
 from detectk import __version__
+from detectk.backtest import BacktestRunner
 from detectk.check import MetricCheck
 from detectk.config.loader import ConfigLoader
 from detectk.exceptions import ConfigurationError, DetectKError
@@ -498,6 +499,121 @@ storage:
 
     except Exception as e:
         click.echo(f"❌ Error creating file: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("config_path", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Save results to CSV file (optional)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed progress",
+)
+def backtest(config_path: Path, output: Path | None, verbose: bool) -> None:
+    """Run backtesting on historical data.
+
+    CONFIG_PATH: Path to metric configuration file with backtest enabled
+
+    Backtesting simulates running the metric check at multiple points in time
+    to test detector performance on historical data before production deployment.
+
+    Configuration requirements:
+    - backtest.enabled: true
+    - backtest.data_load_start: "2024-01-01"  # Start loading data
+    - backtest.detection_start: "2024-02-01"  # Start detecting (after window)
+    - backtest.detection_end: "2024-03-01"    # End detecting
+    - backtest.step_interval: "10 minutes"    # Time between checks
+
+    \b
+    Examples:
+        # Run backtest
+        dtk backtest examples/backtest/sessions.yaml
+
+        # Save results to CSV
+        dtk backtest examples/backtest/sessions.yaml -o results.csv
+
+        # Verbose output
+        dtk backtest examples/backtest/sessions.yaml -v
+    """
+    if verbose:
+        logging.getLogger("detectk").setLevel(logging.DEBUG)
+
+    try:
+        click.echo(f"📊 Running backtest: {config_path}")
+        click.echo()
+
+        # Run backtest
+        runner = BacktestRunner()
+        result = runner.run(config_path)
+
+        # Display summary
+        click.echo()
+        click.echo("✅ Backtest completed!")
+        click.echo()
+        click.echo(f"📈 Results for: {result.metric_name}")
+        click.echo(f"   Duration: {result.duration_seconds:.2f}s")
+        click.echo(f"   Total checks: {result.total_checks}")
+        click.echo(f"   Anomalies detected: {result.anomalies_detected}")
+        click.echo(f"   Alerts sent: {result.alerts_sent}")
+
+        if result.total_checks > 0:
+            anomaly_rate = (result.anomalies_detected / result.total_checks) * 100
+            alert_rate = (result.alerts_sent / result.total_checks) * 100
+            click.echo(f"   Anomaly rate: {anomaly_rate:.1f}%")
+            click.echo(f"   Alert rate: {alert_rate:.1f}%")
+
+        # Save results if requested
+        if output:
+            runner.save_results(result, output)
+            click.echo()
+            click.echo(f"💾 Results saved to: {output}")
+
+        # Show sample of anomalies
+        if result.summary is not None and not result.summary.empty:
+            anomalies = result.summary[result.summary["is_anomaly"] == True]  # noqa: E712
+            if len(anomalies) > 0:
+                click.echo()
+                click.echo("🔍 Sample anomalies (first 5):")
+                click.echo()
+                sample = anomalies.head(5)[
+                    ["timestamp", "value", "score", "direction", "alert_sent"]
+                ]
+                for _, row in sample.iterrows():
+                    alert_icon = "✓" if row["alert_sent"] else " "
+                    click.echo(
+                        f"  [{alert_icon}] {row['timestamp']}: "
+                        f"value={row['value']:.2f}, "
+                        f"score={row['score']:.2f}, "
+                        f"direction={row['direction']}"
+                    )
+
+                if len(anomalies) > 5:
+                    click.echo(f"  ... and {len(anomalies) - 5} more anomalies")
+
+    except ConfigurationError as e:
+        click.echo(f"❌ Configuration error: {e}", err=True)
+        if verbose and e.__cause__:
+            click.echo(f"   Cause: {e.__cause__}", err=True)
+        sys.exit(1)
+    except DetectKError as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        if verbose and e.__cause__:
+            click.echo(f"   Cause: {e.__cause__}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"❌ Unexpected error: {e}", err=True)
+        if verbose:
+            import traceback
+
+            traceback.print_exc()
         sys.exit(1)
 
 

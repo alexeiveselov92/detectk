@@ -1,0 +1,70 @@
+# Backtesting Example - Session Monitoring
+#
+# Tests MAD detector on 30 days of historical data
+#
+# This configuration simulates running metric checks every 10 minutes
+# for one month to evaluate detector performance before production deployment.
+
+name: "sessions_10min_backtest"
+description: "Backtest session monitoring with MAD detector"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      -- Query collects value at specific execution time
+      -- execution_time is provided by BacktestRunner for each iteration
+      SELECT count() as value
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ execution_time }}') - INTERVAL 10 MINUTE
+        AND timestamp < toDateTime('{{ execution_time }}')
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"
+
+# Backtesting Configuration
+backtest:
+  enabled: true
+
+  # Load data starting from here (allows 30-day window to accumulate)
+  data_load_start: "2024-01-01 00:00:00"
+
+  # Start detecting after window is accumulated (30 days later)
+  detection_start: "2024-02-01 00:00:00"
+
+  # End detection after one month of testing
+  detection_end: "2024-03-01 00:00:00"
+
+  # Check every 10 minutes (2,880 checks per month)
+  step_interval: "10 minutes"
+
+# Expected results:
+# - Total checks: ~4,320 (30 days * 144 checks/day)
+# - Anomalies: depends on data, typically 1-5% with n_sigma=3.0
+# - Alerts: fewer than anomalies due to cooldown (60 min)
+#
+# Run with:
+#   dtk backtest examples/backtest/sessions_backtest.yaml
+#
+# Save results:
+#   dtk backtest examples/backtest/sessions_backtest.yaml -o results.csv
