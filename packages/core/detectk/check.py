@@ -224,26 +224,57 @@ class MetricCheck:
             execution_time: Execution time
 
         Returns:
-            DataPoint with collected value
+            DataPoint with collected value (latest from time range)
 
         Raises:
             CollectionError: If data collection fails
         """
         try:
+            from datetime import timedelta
+
             # Get collector class from registry
             collector_class = CollectorRegistry.get(config.collector.type)
 
             # Create collector instance
             collector = collector_class(config.collector.params)
 
-            # Collect data
-            datapoint = collector.collect(at_time=execution_time)
+            # Determine time range for collection
+            # For real-time mode: collect data for last interval period
+            # Default to 10 minutes if no schedule specified
+            if config.schedule and config.schedule.interval:
+                # Parse interval string (e.g., "10 minutes")
+                interval_str = config.schedule.interval
+                # Simple parsing for common cases
+                if "minute" in interval_str:
+                    minutes = int(interval_str.split()[0])
+                    delta = timedelta(minutes=minutes)
+                elif "hour" in interval_str:
+                    hours = int(interval_str.split()[0])
+                    delta = timedelta(hours=hours)
+                else:
+                    delta = timedelta(minutes=10)  # Default
+            else:
+                delta = timedelta(minutes=10)  # Default
+
+            period_finish = execution_time
+            period_start = execution_time - delta
+
+            # Collect data for time range
+            datapoints = collector.collect_bulk(
+                period_start=period_start,
+                period_finish=period_finish,
+            )
 
             # Close collector resources
             if hasattr(collector, "close"):
                 collector.close()
 
-            return datapoint
+            # Return the latest datapoint (or create one if empty)
+            if datapoints:
+                return datapoints[-1]  # Latest point
+            else:
+                # No data collected - return placeholder
+                return DataPoint(timestamp=execution_time, value=None, is_missing=True)
 
         except Exception as e:
             raise CollectionError(
@@ -281,8 +312,8 @@ class MetricCheck:
             # Create storage instance
             storage = storage_class(config.storage.params)
 
-            # Save datapoint to dtk_datapoints table
-            storage.save_datapoint(metric_name, datapoint)
+            # Save datapoint to dtk_datapoints table (as single-item list)
+            storage.save_datapoints_bulk(metric_name, [datapoint])
 
             logger.debug(f"Saved datapoint to storage: {metric_name}")
 

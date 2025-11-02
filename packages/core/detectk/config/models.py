@@ -568,14 +568,9 @@ class MetricConfig(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:
         """Additional validation after model initialization."""
-        # Validate backtest configuration
-        if self.backtest.enabled:
-            if not self.backtest.data_load_start:
-                raise ValueError("backtest.data_load_start is required when backtesting is enabled")
-            if not self.backtest.detection_start:
-                raise ValueError("backtest.detection_start is required when backtesting is enabled")
-            if not self.backtest.step_interval:
-                raise ValueError("backtest.step_interval is required when backtesting is enabled")
+        # No additional validation needed for now
+        # Schedule validation is handled by ScheduleConfig model itself
+        pass
 
     def get_detectors(self) -> list[DetectorConfig]:
         """Get list of detectors for this metric.

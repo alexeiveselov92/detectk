@@ -293,7 +293,7 @@ def test_config_loader_env_var_missing_required() -> None:
 
 
 def test_config_loader_jinja2_template() -> None:
-    """Test Jinja2 template rendering in queries."""
+    """Test that queries are NOT rendered (preserved for collector)."""
     loader = ConfigLoader()
 
     yaml_content = """
@@ -319,12 +319,13 @@ def test_config_loader_jinja2_template() -> None:
     config_dict = loader._parse_yaml(yaml_content, template_context)
 
     query = config_dict["collector"]["params"]["query"]
-    assert "2024-01-15 10:00:00" in query
-    assert "{{ execution_time }}" not in query
+    # CRITICAL: Query must NOT be rendered - preserved for collector
+    assert "{{ execution_time }}" in query
+    assert "2024-01-15 10:00:00" not in query
 
 
 def test_config_loader_jinja2_datetime_filter() -> None:
-    """Test custom datetime_format filter."""
+    """Test that queries with filters are also NOT rendered."""
     loader = ConfigLoader()
 
     yaml_content = """
@@ -345,8 +346,9 @@ def test_config_loader_jinja2_datetime_filter() -> None:
     config_dict = loader._parse_yaml(yaml_content, {"execution_time": execution_time})
 
     query = config_dict["collector"]["params"]["query"]
-    assert "2024-01-15" in query
-    assert "10:30:45" not in query  # Time should be excluded by format
+    # Query must NOT be rendered - preserved for collector
+    assert "{{ execution_time" in query
+    assert "2024-01-15" not in query
 
 
 def test_config_loader_load_dict() -> None:
@@ -397,7 +399,9 @@ def test_config_loader_load_dict_with_templates() -> None:
     config = loader.load_dict(config_dict, template_context={"execution_time": execution_time})
 
     query = config.collector.params["query"]
-    assert "2024-01-15" in query
+    # Query must NOT be rendered - preserved for collector
+    assert "{{ execution_time }}" in query
+    assert "2024-01-15" not in query
 
 
 def test_config_loader_load_file() -> None:

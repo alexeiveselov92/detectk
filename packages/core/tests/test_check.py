@@ -28,11 +28,15 @@ class MockCollector(BaseCollector):
         self.config = config
         self.closed = False
 
-    def collect(self, at_time: datetime | None = None) -> DataPoint:
+    def collect_bulk(
+        self,
+        period_start: datetime,
+        period_finish: datetime,
+    ) -> list[DataPoint]:
         """Return fixed datapoint."""
         value = self.config.get("value", 100.0)
-        timestamp = at_time or datetime.now()
-        return DataPoint(timestamp=timestamp, value=value)
+        timestamp = period_finish  # Use end of period as timestamp
+        return [DataPoint(timestamp=timestamp, value=value)]
 
     def close(self) -> None:
         """Mark as closed."""
@@ -47,12 +51,23 @@ class MockStorage(BaseStorage):
 
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
-        self.saved_datapoints: list[tuple[str, DataPoint]] = []
+        self.saved_datapoints: list[tuple[str, list[DataPoint]]] = []
         self.saved_detections: list[tuple[str, Any]] = []
 
-    def save_datapoint(self, metric_name: str, datapoint: DataPoint) -> None:
-        """Track saved datapoint."""
-        self.saved_datapoints.append((metric_name, datapoint))
+    def save_datapoints_bulk(
+        self,
+        metric_name: str,
+        datapoints: list[DataPoint],
+    ) -> None:
+        """Track saved datapoints."""
+        self.saved_datapoints.append((metric_name, datapoints))
+
+    def get_last_loaded_timestamp(
+        self,
+        metric_name: str,
+    ) -> datetime | None:
+        """Return None (no previous loads)."""
+        return None
 
     def query_datapoints(
         self,

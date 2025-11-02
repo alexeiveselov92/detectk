@@ -137,7 +137,7 @@ class BaseStorage(ABC):
             ...     start = last + timedelta(minutes=10)
             ... else:
             ...     print("No data loaded yet")
-            ...     start = config.backtest.data_load_start
+            ...     start = config.schedule.start_time
         """
         pass
 
