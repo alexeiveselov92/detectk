@@ -54,7 +54,7 @@ class TestGenericSQLCollector:
         """Test collector initialization."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value FROM events",
+            "query": "SELECT COUNT(*) as value FROM events -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
@@ -85,11 +85,31 @@ class TestGenericSQLCollector:
         with pytest.raises(ConfigurationError, match="cannot be empty"):
             GenericSQLCollector(config)
 
+    def test_missing_period_start_variable(self, sqlite_db):
+        """Test that missing period_start variable raises error."""
+        config = {
+            "connection_string": sqlite_db,
+            "query": "SELECT COUNT(*) as value FROM events WHERE timestamp < '{{ period_finish }}'",
+        }
+
+        with pytest.raises(ConfigurationError, match="period_start"):
+            GenericSQLCollector(config)
+
+    def test_missing_period_finish_variable(self, sqlite_db):
+        """Test that missing period_finish variable raises error."""
+        config = {
+            "connection_string": sqlite_db,
+            "query": "SELECT COUNT(*) as value FROM events WHERE timestamp >= '{{ period_start }}'",
+        }
+
+        with pytest.raises(ConfigurationError, match="period_finish"):
+            GenericSQLCollector(config)
+
     def test_invalid_connection_string(self):
         """Test that invalid connection string format raises error."""
         config = {
             "connection_string": "invalid://connection",
-            "query": "SELECT 1 as value",
+            "query": "SELECT 1 as value -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         with pytest.raises(ConfigurationError, match="Invalid connection string"):
@@ -99,81 +119,102 @@ class TestGenericSQLCollector:
         """Test basic data collection."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value, datetime('now') as timestamp FROM events",
+            # Use a simple query that includes the variables but always returns data
+            # SQLite doesn't have great timestamp comparison, so we'll count all events
+            "query": "SELECT COUNT(*) as value, datetime('now') as period_time FROM events WHERE 1=1 -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
-        datapoint = collector.collect()
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
+        datapoints = collector.collect_bulk(period_start, period_finish)
 
-        assert datapoint.value == 5.0  # 5 events in test data
-        assert isinstance(datapoint.timestamp, datetime)
-        assert datapoint.is_missing is False
-        assert datapoint.metadata["source"] == "sql"
-        assert datapoint.metadata["db_type"] == "sqlite"
+        assert len(datapoints) == 1
+        assert datapoints[0].value == 5.0  # 5 events in test data
+        assert isinstance(datapoints[0].timestamp, datetime)
+        assert datapoints[0].is_missing is False
+        assert datapoints[0].metadata["source"] == "sql"
+        assert datapoints[0].metadata["db_type"] == "sqlite"
 
     def test_collect_without_timestamp(self, sqlite_db):
-        """Test collection when query doesn't return timestamp."""
+        """Test collection when query doesn't return period_time (should fail validation)."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value FROM events",
+            "query": "SELECT COUNT(*) as value FROM events -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
-        datapoint = collector.collect()
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
 
-        assert datapoint.value == 5.0
-        assert isinstance(datapoint.timestamp, datetime)  # Uses current time
+        # This should fail because query doesn't return period_time column
+        with pytest.raises(CollectionError, match="missing timestamp column"):
+            collector.collect_bulk(period_start, period_finish)
 
     def test_collect_empty_result(self, sqlite_db):
         """Test collection when query returns no rows."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value FROM events WHERE user_id = 999",  # No such user
+            "query": "SELECT COUNT(*) as value, datetime('now') as period_time FROM events WHERE user_id = 999 -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
-        datapoint = collector.collect()
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
+        datapoints = collector.collect_bulk(period_start, period_finish)
 
         # COUNT(*) always returns a row with value=0
-        assert datapoint.value == 0.0
+        assert len(datapoints) == 1
+        assert datapoints[0].value == 0.0
 
     def test_collect_missing_value_column(self, sqlite_db):
         """Test that missing value column raises error."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as count FROM events",  # Wrong column name
+            "query": "SELECT COUNT(*) as count, datetime('now') as period_time FROM events -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
 
-        with pytest.raises(CollectionError, match="must return 'value' column"):
-            collector.collect()
+        with pytest.raises(CollectionError, match="missing value column"):
+            collector.collect_bulk(period_start, period_finish)
 
     def test_collect_with_at_time(self, sqlite_db):
-        """Test collection with specific at_time."""
+        """Test collection with specific period_start and period_finish."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value FROM events",
+            "query": "SELECT COUNT(*) as value, datetime('now') as period_time FROM events -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
-        at_time = datetime(2024, 11, 1, 12, 0, 0)
-        datapoint = collector.collect(at_time=at_time)
+        period_start = datetime(2024, 11, 1, 12, 0, 0)
+        period_finish = datetime(2024, 11, 1, 12, 10, 0)
+        datapoints = collector.collect_bulk(period_start, period_finish)
 
-        # at_time is used if query doesn't return timestamp
-        assert datapoint.timestamp == at_time
+        # Should get results since our test data exists
+        assert len(datapoints) == 1
+        assert datapoints[0].value == 5.0  # All 5 events
 
     def test_close(self, sqlite_db):
         """Test that close disposes engine."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value FROM events",
+            "query": "SELECT COUNT(*) as value, datetime('now') as period_time FROM events -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
 
         # Trigger engine creation
-        collector.collect()
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
+        collector.collect_bulk(period_start, period_finish)
         assert collector.engine is not None
 
         # Close
@@ -184,7 +225,7 @@ class TestGenericSQLCollector:
         """Test PostgreSQL detection."""
         config = {
             "connection_string": "postgresql://localhost/test",
-            "query": "SELECT 1 as value",
+            "query": "SELECT 1 as value, now() as period_time WHERE timestamp >= '{{ period_start }}' AND timestamp < '{{ period_finish }}'",
         }
 
         collector = GenericSQLCollector(config)
@@ -194,7 +235,7 @@ class TestGenericSQLCollector:
         """Test MySQL detection."""
         config = {
             "connection_string": "mysql://localhost/test",
-            "query": "SELECT 1 as value",
+            "query": "SELECT 1 as value, now() as period_time WHERE timestamp >= '{{ period_start }}' AND timestamp < '{{ period_finish }}'",
         }
 
         collector = GenericSQLCollector(config)
@@ -204,34 +245,43 @@ class TestGenericSQLCollector:
         """Test that multiple collections reuse the same engine."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(*) as value FROM events",
+            "query": "SELECT COUNT(*) as value, datetime('now') as period_time FROM events -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
 
         # First collection
-        dp1 = collector.collect()
+        dp1 = collector.collect_bulk(period_start, period_finish)
         engine1 = collector.engine
 
         # Second collection
-        dp2 = collector.collect()
+        dp2 = collector.collect_bulk(period_start, period_finish)
         engine2 = collector.engine
 
         # Engine should be reused
         assert engine1 is engine2
-        assert dp1.value == dp2.value
+        assert len(dp1) == len(dp2)
+        assert dp1[0].value == dp2[0].value
 
     def test_query_with_filter(self, sqlite_db):
         """Test query with WHERE clause."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT COUNT(DISTINCT user_id) as value FROM events WHERE user_id <= 2",
+            # Filter by user_id, but include the required variables in a comment
+            "query": "SELECT COUNT(DISTINCT user_id) as value, datetime('now') as period_time FROM events WHERE user_id <= 2 -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
-        datapoint = collector.collect()
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
+        datapoints = collector.collect_bulk(period_start, period_finish)
 
-        assert datapoint.value == 2.0  # user_id 1 and 2
+        assert len(datapoints) == 1
+        assert datapoints[0].value == 2.0  # user_id 1 and 2
 
 
 class TestGenericSQLCollectorEdgeCases:
@@ -258,26 +308,32 @@ class TestGenericSQLCollectorEdgeCases:
         """Test handling of connection failures."""
         config = {
             "connection_string": "sqlite:///nonexistent/path/db.db",
-            "query": "SELECT 1 as value",
+            "query": "SELECT 1 as value, datetime('now') as period_time -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
 
         # Connection should fail when executing query
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
         with pytest.raises(CollectionError, match="SQL query failed|Unexpected error"):
-            collector.collect()
+            collector.collect_bulk(period_start, period_finish)
 
     def test_invalid_sql_syntax(self, sqlite_db):
         """Test handling of SQL syntax errors."""
         config = {
             "connection_string": sqlite_db,
-            "query": "SELECT INVALID SYNTAX",
+            "query": "SELECT INVALID SYNTAX -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
 
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
         with pytest.raises(CollectionError, match="SQL query failed"):
-            collector.collect()
+            collector.collect_bulk(period_start, period_finish)
 
     def test_non_numeric_value(self):
         """Test handling of non-numeric value column."""
@@ -286,18 +342,23 @@ class TestGenericSQLCollectorEdgeCases:
 
         engine = create_engine(f"sqlite:///{db_path}")
         with engine.connect() as conn:
-            conn.execute(text("CREATE TABLE test (name TEXT)"))
-            conn.execute(text("INSERT INTO test VALUES ('text')"))
+            conn.execute(text("CREATE TABLE test (name TEXT, created DATETIME DEFAULT CURRENT_TIMESTAMP)"))
+            conn.execute(text("INSERT INTO test (name) VALUES ('text')"))
             conn.commit()
 
         config = {
             "connection_string": f"sqlite:///{db_path}",
-            "query": "SELECT name as value FROM test",
+            "query": "SELECT name as value, created as period_time FROM test -- period: {{ period_start }} to {{ period_finish }}",
         }
 
         collector = GenericSQLCollector(config)
 
-        with pytest.raises(CollectionError, match="Invalid value"):
-            collector.collect()
+        from datetime import datetime, timedelta
+        period_start = datetime.now() - timedelta(hours=1)
+        period_finish = datetime.now() + timedelta(hours=1)
+
+        # Should return empty list since non-numeric values are skipped with warning
+        datapoints = collector.collect_bulk(period_start, period_finish)
+        assert len(datapoints) == 0  # Non-numeric value skipped
 
         Path(db_path).unlink(missing_ok=True)

@@ -378,23 +378,15 @@ class GenericSQLCollector(BaseCollector):
 
         except SQLAlchemyError as e:
             raise CollectionError(
-                f"SQL query failed: {e}",
+                f"SQL query failed: {e} (period: {period_start} to {period_finish})",
                 source="sql",
-                details={
-                    "period_start": str(period_start),
-                    "period_finish": str(period_finish),
-                },
             )
         except CollectionError:
             raise
         except Exception as e:
             raise CollectionError(
-                f"Unexpected error during SQL collection: {e}",
+                f"Unexpected error during SQL collection: {e} (period: {period_start} to {period_finish})",
                 source="sql",
-                details={
-                    "period_start": str(period_start),
-                    "period_finish": str(period_finish),
-                },
             )
 
     def close(self) -> None:
