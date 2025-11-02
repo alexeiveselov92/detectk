@@ -1,6 +1,6 @@
 [project]
 name = "detectk-detectors"
-version = "0.1.0"
+version = "0.1.1"
 description = "Core detectors for DetectK: threshold, statistical (MAD, Z-score, IQR)"
 authors = [{name = "Alexei Veselov", email = "alexeiveselov92@gmail.com"}]
 readme = "README.md"

@@ -1,6 +1,6 @@
 [project]
 name = "detectk-collectors-clickhouse"
-version = "0.1.0"
+version = "0.1.1"
 description = "ClickHouse collector and storage for DetectK"
 authors = [{name = "Alexei Veselov", email = "alexeiveselov92@gmail.com"}]
 readme = "README.md"
