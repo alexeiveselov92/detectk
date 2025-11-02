@@ -1,0 +1,163 @@
+# Example: User Sessions with Hourly and Day-of-Week Seasonality
+#
+# Use Case: Monitor user sessions with combined seasonal patterns
+# - Different patterns on weekdays vs weekends
+# - Different patterns by hour of day (morning/afternoon/evening/night)
+# - Combined: Monday 9AM is different from Saturday 9AM
+#
+# Requirements:
+# - pip install detectk detectk-collectors-clickhouse detectk-detectors detectk-alerters-mattermost
+# - ClickHouse database with sessions table
+# - Mattermost webhook for alerts
+
+name: "sessions_10min_seasonal"
+description: "Monitor user sessions every 10 minutes with hourly+day-of-week seasonality"
+
+# Data Collection with Seasonal Features
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+    # Time series query with seasonal features
+    # Returns multiple rows with timestamps and context
+    query: |
+      SELECT
+        toStartOfInterval(timestamp, INTERVAL 10 minute) AS period_time,
+        count(DISTINCT user_id) AS value,
+
+        -- Seasonal features: hour and day of week
+        toHour(period_time) AS hour_of_day,
+        toDayOfWeek(period_time) AS day_of_week,
+
+        -- Optional: additional context
+        if(toDayOfWeek(period_time) IN (6, 7), 1, 0) AS is_weekend
+
+      FROM sessions
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      ORDER BY period_time
+
+    # Column mapping
+    timestamp_column: "period_time"
+    value_column: "value"
+    context_columns: ["hour_of_day", "day_of_week", "is_weekend"]
+
+# Storage for historical window
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "metrics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+    # Save detection results for analysis (optional)
+    save_detections: false
+
+    # Retention policy
+    datapoints_retention_days: 90
+    detections_retention_days: 30
+
+# Anomaly Detection with Combined Seasonality
+detector:
+  type: "mad"  # Median Absolute Deviation (robust to outliers)
+  params:
+    # Historical window for statistics
+    window_size: "30 days"  # Need enough data for each seasonal group
+
+    # Anomaly threshold (number of MAD sigmas)
+    n_sigma: 3.0  # Standard: 3.0, Sensitive: 2.5, Conservative: 4.0
+
+    # Weighted statistics (recent data weighted more)
+    use_weighted: true
+    exp_decay_factor: 0.1  # Higher = more weight to recent data
+
+    # Seasonal features configuration
+    seasonal_features: ["hour_of_day", "day_of_week"]
+
+    # Combined seasonality: Compare Monday 9AM only with other Monday 9AMs
+    # If false: Compare with (all Mondays OR all 9AMs) - more data, less precise
+    use_combined_seasonality: true
+
+# Alert Delivery
+alerter:
+  enabled: true  # Set to false for historical data loading
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    channel: "#ops-alerts"
+    username: "DetectK Bot"
+
+    # Cooldown to prevent alert spam
+    cooldown_minutes: 60
+
+  # Alert conditions (future feature - currently alerts on any anomaly)
+  conditions:
+    direction: "both"  # 'up', 'down', 'both'
+    consecutive_anomalies: 1  # Alert after N consecutive anomalies
+    min_deviation_percent: 20  # Only alert if deviation > 20%
+
+# Scheduling for continuous monitoring
+schedule:
+  interval: "10 minutes"  # Check every 10 minutes
+
+  # For historical data loading (optional)
+  # start_time: "2024-01-01"
+  # end_time: "2024-03-01"
+  # batch_load_days: 30
+
+# Metadata for organization
+metadata:
+  team: "analytics"
+  priority: "high"
+  dashboards:
+    - "https://grafana.example.com/d/sessions"
+  runbook: "https://wiki.example.com/runbooks/sessions-monitoring"
+
+# Environment Variables Required:
+# export CLICKHOUSE_HOST="clickhouse.prod.example.com"
+# export CLICKHOUSE_USER="detectk"
+# export CLICKHOUSE_PASSWORD="your_secure_password"
+# export MATTERMOST_WEBHOOK="https://mattermost.example.com/hooks/xxx"
+
+# How It Works:
+#
+# 1. Every 10 minutes, collector runs the query for last 10 minutes
+# 2. Query returns multiple rows (one per 10-min interval in last 10 min, usually 1 row)
+# 3. Each row includes seasonal features: hour_of_day, day_of_week
+# 4. Storage saves datapoints to dtk_datapoints table with context
+# 5. Detector loads 30 days of historical data
+# 6. Detector filters historical data by current seasonal group
+#    Example: If now is Monday 9AM, only use historical Monday 9AM points
+# 7. Detector calculates weighted median and MAD for filtered group
+# 8. Detector checks if current value is outside [median ± 3*MAD]
+# 9. If anomaly detected, alerter sends Mattermost message (respecting cooldown)
+#
+# Why Combined Seasonality:
+# - Monday 9AM traffic pattern is very different from Saturday 9AM
+# - Weekday evening (6PM) is different from weekend evening
+# - Combined mode ensures accurate comparison within same seasonal context
+#
+# Expected Behavior:
+# - Normal: Monday 9AM = 1200±100 sessions → 1150 sessions = OK
+# - Anomaly: Monday 9AM = 1200±100 sessions → 800 sessions = ALERT (down 33%)
+# - No false positive: Saturday 9AM = 300 sessions → 1200 would be anomaly for Saturday,
+#   but won't trigger because Saturday has its own baseline (~300)
+
+# Running the Check:
+# dtk run examples/seasonal/sessions_hourly_dow.yaml
+
+# Historical Data Loading:
+# 1. Edit schedule section to add start_time/end_time
+# 2. Set alerter.enabled: false
+# 3. Run: dtk run examples/seasonal/sessions_hourly_dow.yaml
+# 4. System loads data in batches, saving to storage
+# 5. After loading complete, set alerter.enabled: true and remove start_time/end_time

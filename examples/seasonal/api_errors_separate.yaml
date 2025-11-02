@@ -1,0 +1,163 @@
+# Example: API Errors with Separate Seasonality (Union Mode)
+#
+# Use Case: Monitor API error rate with flexible seasonal grouping
+# - Different patterns by hour of day (peak traffic hours)
+# - Different patterns by day of week (weekday vs weekend)
+# - BUT these patterns are somewhat independent
+# - Use UNION (OR) mode to get more data for statistics
+#
+# When to use Separate vs Combined:
+# - Separate (OR): Factors are somewhat independent, need more data
+# - Combined (AND): Factors are tightly coupled, need precise grouping
+#
+# Requirements:
+# - pip install detectk detectk-collectors-clickhouse detectk-detectors detectk-alerters-slack
+
+name: "api_errors_5min"
+description: "Monitor API error rate with separate (union) seasonality"
+
+# Data Collection
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "logs"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+    query: |
+      SELECT
+        toStartOfInterval(timestamp, INTERVAL 5 minute) AS period_time,
+
+        -- Error rate: percentage of 5xx responses
+        countIf(status_code >= 500) * 100.0 / count() AS value,
+
+        -- Seasonal features
+        toHour(period_time) AS hour_of_day,
+        toDayOfWeek(period_time) AS day_of_week,
+
+        -- Additional context
+        count() AS total_requests,
+        countIf(status_code >= 500) AS error_count
+
+      FROM api_requests
+      WHERE timestamp >= toDateTime('{{ period_start }}')
+        AND timestamp < toDateTime('{{ period_finish }}')
+      GROUP BY period_time
+      HAVING total_requests > 10  -- Ignore low-traffic periods
+      ORDER BY period_time
+
+    timestamp_column: "period_time"
+    value_column: "value"
+    context_columns: ["hour_of_day", "day_of_week", "total_requests", "error_count"]
+
+# Storage
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "metrics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+    save_detections: false
+    datapoints_retention_days: 30
+
+# Anomaly Detection with Separate Seasonality
+detector:
+  type: "mad"
+  params:
+    # Shorter window OK for separate mode (more data per group)
+    window_size: "14 days"
+
+    # More sensitive for error rates
+    n_sigma: 2.5  # Lower = more sensitive
+
+    use_weighted: true
+    exp_decay_factor: 0.15
+
+    # Separate mode: use UNION of seasonal groups
+    seasonal_features: ["hour_of_day", "day_of_week"]
+    use_combined_seasonality: false  # ← KEY: Separate (OR) mode
+
+# Alert Delivery
+alerter:
+  enabled: true
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    channel: "#alerts-api"
+    username: "API Monitor"
+
+    cooldown_minutes: 30  # 5-min checks, allow multiple alerts
+
+  conditions:
+    direction: "up"  # Only alert on error rate increases
+    min_deviation_percent: 50  # Only significant spikes
+
+# Scheduling
+schedule:
+  interval: "5 minutes"
+
+# Metadata
+metadata:
+  team: "platform"
+  priority: "high"
+  dashboards:
+    - "https://grafana.example.com/d/api-health"
+
+# How Separate Seasonality Works:
+#
+# Combined mode (use_combined_seasonality: true):
+# - Current: Monday 14:00
+# - Uses only: Historical Monday 14:00 points
+# - Small group: ~4-8 points (2 weeks, 1 per week)
+#
+# Separate mode (use_combined_seasonality: false):
+# - Current: Monday 14:00
+# - Uses: All Monday points (any hour) OR all 14:00 points (any day)
+# - Larger group: ~200+ points (2 weeks * 24h * 7d, union)
+#
+# Why Separate for Error Rates:
+# 1. More statistical power: Larger sample size
+# 2. Error patterns correlate with traffic, not specific day+hour combos
+# 3. Hour 14 on any day has similar traffic patterns
+# 4. Mondays (any hour) have similar patterns
+# 5. UNION captures both patterns without requiring exact match
+#
+# Trade-off:
+# ✓ More data → more reliable statistics
+# ✓ Works with shorter historical windows
+# ✗ Less precise grouping (may miss subtle patterns)
+# ✗ If Monday 14:00 is truly unique, combined mode would be better
+
+# When to Choose Separate vs Combined:
+#
+# Use Separate (union, OR) when:
+# - Seasonal factors are somewhat independent
+# - Need more data for reliable statistics
+# - Short historical window available
+# - Metric behavior driven by single dominant factor
+# - Examples: Error rates, API latency, queue lengths
+#
+# Use Combined (intersection, AND) when:
+# - Seasonal factors are tightly coupled
+# - Patterns change dramatically by combination
+# - Have long historical window (30+ days)
+# - Need precise seasonal matching
+# - Examples: User sessions, revenue, game activity
+
+# Running:
+# dtk run examples/seasonal/api_errors_separate.yaml
+
+# Comparison Test:
+# Try both modes and see which works better for your data:
+#
+# 1. Run with use_combined_seasonality: false (separate)
+# 2. Check alert accuracy for 1-2 weeks
+# 3. Change to use_combined_seasonality: true (combined)
+# 4. Check alert accuracy again
+# 5. Keep whichever produces fewer false positives

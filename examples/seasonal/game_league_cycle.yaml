@@ -1,0 +1,184 @@
+# Example: Game Revenue with 14-Day League Cycle Seasonality
+#
+# Use Case: Mobile game with recurring 14-day leagues
+# - League starts on day 0 (high activity, many purchases)
+# - Mid-league days 5-8 (lower activity)
+# - League finale days 12-13 (spike in competitive purchases)
+# - Pattern repeats every 14 days
+#
+# Challenge: Standard day-of-week seasonality doesn't capture this pattern
+# Solution: Custom league_day feature (0-13) with modulo arithmetic
+#
+# Requirements:
+# - pip install detectk detectk-collectors-clickhouse detectk-detectors detectk-alerters-mattermost
+# - ClickHouse database with in-app purchases table
+# - Known league start date (e.g., 2024-01-01 was day 0)
+
+name: "iap_revenue_league_cycle"
+description: "Monitor in-app purchase revenue with 14-day league cycle seasonality"
+
+# Data Collection with Custom League Day Feature
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "game_analytics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+    # Time series query with custom league_day calculation
+    query: |
+      SELECT
+        toDate(purchase_time) AS date,
+        sum(amount_usd) AS value,
+
+        -- Custom league day: 14-day cycle starting from 2024-01-01
+        -- day 0 = league start, day 13 = league finale
+        dateDiff('day', toDate('2024-01-01'), date) % 14 AS league_day,
+
+        -- Additional context
+        toHour(purchase_time) AS hour_of_day,
+        toDayOfWeek(date) AS day_of_week,
+
+        -- Which league cycle number (for analysis)
+        floor(dateDiff('day', toDate('2024-01-01'), date) / 14) AS league_number
+
+      FROM iap_purchases
+      WHERE purchase_time >= toDateTime('{{ period_start }}')
+        AND purchase_time < toDateTime('{{ period_finish }}')
+        AND amount_usd > 0
+      GROUP BY date
+      ORDER BY date
+
+    # Column mapping
+    timestamp_column: "date"
+    value_column: "value"
+    context_columns: ["league_day", "hour_of_day", "day_of_week", "league_number"]
+
+# Storage
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "metrics"
+    user: "${CLICKHOUSE_USER:-default}"
+    password: "${CLICKHOUSE_PASSWORD}"
+
+    save_detections: true  # Save for league pattern analysis
+
+    # Need enough history to cover multiple league cycles
+    datapoints_retention_days: 180  # ~13 league cycles
+
+# Anomaly Detection with League Day Seasonality
+detector:
+  type: "mad"
+  params:
+    # Window must cover multiple complete league cycles
+    # 84 days = 6 complete cycles (6 * 14 days)
+    window_size: "84 days"
+
+    # Threshold
+    n_sigma: 3.0
+
+    # Weighted statistics
+    use_weighted: true
+    exp_decay_factor: 0.05  # Lower = smoother (daily data, not 10-min)
+
+    # Seasonal features: only league_day
+    # This ensures day 0 is compared only with other day 0s, etc.
+    seasonal_features: ["league_day"]
+
+    # Combined mode (only one feature, so doesn't matter)
+    use_combined_seasonality: true
+
+# Alert Delivery
+alerter:
+  enabled: true
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    channel: "#game-ops"
+    username: "Revenue Monitor"
+
+    cooldown_minutes: 360  # 6 hours (daily data, avoid spam)
+
+  conditions:
+    direction: "both"
+    consecutive_anomalies: 1
+    min_deviation_percent: 25  # Only significant revenue drops/spikes
+
+# Scheduling
+schedule:
+  interval: "1 day"  # Check daily at same time
+
+# Metadata
+metadata:
+  team: "game-ops"
+  priority: "critical"
+  description: "Monitors revenue with 14-day league cycle seasonality"
+  notes: |
+    League Pattern:
+    - Days 0-1: League start, high spending (purchases for early advantage)
+    - Days 5-8: Mid-league plateau
+    - Days 12-13: League finale, spending spike (last-minute competitive purchases)
+
+    Without league_day seasonality, day 13 spike would trigger false positives
+    compared to mid-league days. With league_day, each day has its own baseline.
+
+# Environment Variables:
+# export CLICKHOUSE_HOST="clickhouse.prod.example.com"
+# export CLICKHOUSE_USER="detectk"
+# export CLICKHOUSE_PASSWORD="your_secure_password"
+# export MATTERMOST_WEBHOOK="https://mattermost.example.com/hooks/xxx"
+
+# How League Day Works:
+#
+# Example calculation:
+# - League start: 2024-01-01 (day 0)
+# - Current date: 2024-01-15
+# - Days elapsed: 14 days
+# - league_day = 14 % 14 = 0 (new league starts!)
+#
+# - Current date: 2024-01-20
+# - Days elapsed: 19 days
+# - league_day = 19 % 14 = 5 (mid-league)
+#
+# Historical comparison:
+# - When checking 2024-01-20 (league_day=5), detector uses:
+#   * 2024-01-06 (5 days after 2024-01-01)
+#   * 2023-12-23 (5 days into previous cycle, if history available)
+#   * All other day-5 observations
+#
+# Why This Works:
+# - Day 0 revenue (~$50k): compared with other day 0s (~$50k) ✓
+# - Day 13 revenue (~$40k): compared with other day 13s (~$40k) ✓
+# - Day 7 revenue (~$15k): compared with other day 7s (~$15k) ✓
+# - No false positives from comparing different league days!
+
+# Alternative: Multiple Seasonal Features
+#
+# You can combine league_day with hour_of_day or day_of_week:
+#
+# seasonal_features: ["league_day", "day_of_week"]
+# use_combined_seasonality: true
+#
+# This would compare "league day 0 on Monday" only with other "league day 0 on Mondays"
+# Useful if both patterns matter (league cycle + weekly pattern overlay)
+#
+# Trade-off: Need more historical data (more specific groups)
+
+# Running:
+# dtk run examples/seasonal/game_league_cycle.yaml
+
+# Historical Loading (recommended for league patterns):
+# 1. Load at least 6 complete league cycles (84 days)
+# 2. Set start_time to recent league start date
+# 3. Run with alerter.enabled: false
+# 4. After loading, enable alerter and run continuously
+
+# Adjusting League Start Date:
+# If your league started on different date, update in query:
+# dateDiff('day', toDate('YOUR_LEAGUE_START_DATE'), date) % 14 AS league_day
