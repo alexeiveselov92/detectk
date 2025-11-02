@@ -32,6 +32,11 @@ try:
 except ImportError:
     pass
 
+try:
+    import detectk_alerters_slack  # noqa: F401
+except ImportError:
+    pass
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
