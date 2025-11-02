@@ -301,6 +301,170 @@ def list_alerters() -> None:
         click.echo(f"  • {name:15s} - {description}")
 
 
+@cli.command("list-metrics")
+@click.option(
+    "--path",
+    "-p",
+    type=click.Path(exists=True, path_type=Path),
+    default=".",
+    help="Directory to search for metric configs (default: current directory)",
+)
+@click.option(
+    "--details",
+    is_flag=True,
+    help="Show detailed information about each metric",
+)
+@click.option(
+    "--validate",
+    is_flag=True,
+    help="Validate each metric configuration",
+)
+@click.option(
+    "--collector",
+    "-c",
+    help="Filter by collector type (e.g., clickhouse, sql, http)",
+)
+def list_metrics(path: Path, details: bool, validate: bool, collector: str | None) -> None:
+    """List all metric configurations in the project.
+
+    Scans directories for .yaml files and displays configured metrics.
+
+    \b
+    Examples:
+        # List all metrics in current directory
+        dtk list-metrics
+
+        # List metrics in specific directory
+        dtk list-metrics --path configs/
+
+        # Show detailed information
+        dtk list-metrics --details
+
+        # Validate all metrics
+        dtk list-metrics --validate
+
+        # Filter by collector type
+        dtk list-metrics --collector clickhouse
+    """
+    click.echo("📊 DetectK Metrics:")
+    click.echo()
+
+    # Common directory names to search
+    search_dirs = []
+    for dir_name in ["metrics", "configs", "."]:
+        candidate = path / dir_name if dir_name != "." else path
+        if candidate.exists() and candidate.is_dir():
+            search_dirs.append(candidate)
+
+    # Find all .yaml files
+    yaml_files = []
+    for search_dir in search_dirs:
+        yaml_files.extend(search_dir.glob("**/*.yaml"))
+        yaml_files.extend(search_dir.glob("**/*.yml"))
+
+    if not yaml_files:
+        click.echo("  No metric configuration files found")
+        click.echo(f"  Searched in: {path}")
+        return
+
+    # Load and display metrics
+    config_loader = ConfigLoader()
+    metrics_found = 0
+    metrics_valid = 0
+    metrics_filtered = 0
+
+    for yaml_file in sorted(yaml_files):
+        # Skip template files
+        if yaml_file.name.endswith(".template"):
+            continue
+
+        try:
+            # Try to load config (lenient mode - allow missing env vars)
+            config = config_loader.load_file(str(yaml_file), lenient=True)
+
+            # Filter by collector if specified
+            if collector and config.collector.type != collector:
+                metrics_filtered += 1
+                continue
+
+            metrics_found += 1
+
+            # Display metric
+            if details:
+                click.echo("─" * 70)
+                click.echo(f"📌 {config.name}")
+                click.echo(f"   File: {yaml_file.relative_to(path)}")
+                if config.description:
+                    click.echo(f"   Description: {config.description}")
+                click.echo(f"   Collector: {config.collector.type}")
+
+                # Detectors
+                detectors = config.get_detectors()
+                detector_info = ", ".join(
+                    f"{d.type}(id={d.id[:8] if d.id else 'auto'})" for d in detectors
+                )
+                click.echo(f"   Detectors: {detector_info}")
+
+                # Alerter
+                alerter_info = config.alerter.type if config.alerter else "none"
+                click.echo(f"   Alerter: {alerter_info}")
+
+                # Storage
+                storage_info = (
+                    f"{config.storage.type} (enabled)"
+                    if config.storage and config.storage.enabled
+                    else "disabled"
+                )
+                click.echo(f"   Storage: {storage_info}")
+
+                if validate:
+                    click.echo("   Status: ✅ Valid")
+                    metrics_valid += 1
+
+                click.echo()
+            else:
+                # Simple format
+                collector_info = f"[{config.collector.type}]"
+                file_path = str(yaml_file.relative_to(path))
+                status = "✅" if validate else ""
+
+                if validate:
+                    metrics_valid += 1
+
+                click.echo(f"  {status} {config.name:30s} {collector_info:15s} {file_path}")
+
+        except ConfigurationError as e:
+            # Configuration error - show in output
+            if details:
+                click.echo("─" * 70)
+                click.echo(f"📌 {yaml_file.name}")
+                click.echo(f"   File: {yaml_file.relative_to(path)}")
+                click.echo(f"   Status: ❌ Invalid - {e}")
+                click.echo()
+            else:
+                file_path = str(yaml_file.relative_to(path))
+                click.echo(f"  ❌ {yaml_file.stem:30s} {'[error]':15s} {file_path}")
+
+            metrics_found += 1
+            continue
+
+        except Exception as e:
+            # Unexpected error - skip this file
+            logger.debug(f"Skipping {yaml_file}: {e}")
+            continue
+
+    # Summary
+    click.echo()
+    click.echo("─" * 70)
+    click.echo(f"Total: {metrics_found} metrics found")
+
+    if collector:
+        click.echo(f"Filtered: {metrics_filtered} metrics excluded (collector != {collector})")
+
+    if validate:
+        click.echo(f"Valid: {metrics_valid}/{metrics_found}")
+
+
 @cli.command()
 @click.argument("output_path", type=click.Path(path_type=Path), default="metric_config.yaml")
 @click.option(

@@ -65,6 +65,7 @@ class ConfigLoader:
         self,
         config_path: str | Path,
         template_context: dict[str, Any] | None = None,
+        lenient: bool = False,
     ) -> MetricConfig:
         """Load metric configuration from YAML file.
 
@@ -72,6 +73,9 @@ class ConfigLoader:
             config_path: Path to YAML configuration file
             template_context: Optional context for Jinja2 template rendering
                             (e.g., {"execution_time": datetime.now()})
+            lenient: If True, allows missing environment variables by using
+                    placeholder values. Useful for listing/validating configs
+                    without setting all environment variables. Default: False.
 
         Returns:
             Validated MetricConfig object
@@ -93,6 +97,9 @@ class ConfigLoader:
                     "execution_time": datetime(2024, 1, 15, 10, 0, 0)
                 }
             )
+
+            # Lenient mode for listing metrics without env vars
+            config = loader.load_file("configs/sessions.yaml", lenient=True)
             ```
         """
         config_path = Path(config_path)
@@ -116,7 +123,7 @@ class ConfigLoader:
 
         # Parse with environment variable substitution and templating
         try:
-            config_dict = self._parse_yaml(raw_content, template_context or {})
+            config_dict = self._parse_yaml(raw_content, template_context or {}, lenient=lenient)
         except Exception as e:
             raise ConfigurationError(
                 f"Failed to parse YAML: {e}",
@@ -174,6 +181,7 @@ class ConfigLoader:
         self,
         yaml_content: str,
         template_context: dict[str, Any],
+        lenient: bool = False,
     ) -> dict[str, Any]:
         """Parse YAML with environment variable substitution and templating.
 
@@ -185,6 +193,7 @@ class ConfigLoader:
         Args:
             yaml_content: Raw YAML content as string
             template_context: Context for Jinja2 rendering
+            lenient: If True, use placeholders for missing env vars
 
         Returns:
             Parsed configuration dictionary
@@ -193,7 +202,7 @@ class ConfigLoader:
             ConfigurationError: If parsing or substitution fails
         """
         # Step 1: Environment variable substitution
-        content_with_env = self._substitute_env_vars(yaml_content)
+        content_with_env = self._substitute_env_vars(yaml_content, lenient=lenient)
 
         # Step 2: Jinja2 template rendering (if context provided)
         if template_context:
@@ -216,7 +225,7 @@ class ConfigLoader:
 
         return config_dict
 
-    def _substitute_env_vars(self, content: str) -> str:
+    def _substitute_env_vars(self, content: str, lenient: bool = False) -> str:
         """Substitute environment variables in format ${VAR_NAME}.
 
         Supports:
@@ -225,12 +234,13 @@ class ConfigLoader:
 
         Args:
             content: String content with ${VAR_NAME} placeholders
+            lenient: If True, use placeholder for missing vars instead of raising error
 
         Returns:
             Content with substituted values
 
         Raises:
-            ConfigurationError: If required variable is not set
+            ConfigurationError: If required variable is not set (unless lenient=True)
 
         Example:
             Input: "host: ${CLICKHOUSE_HOST:-localhost}"
@@ -256,6 +266,9 @@ class ConfigLoader:
             if value is None:
                 if default_value is not None:
                     return default_value
+                elif lenient:
+                    # Lenient mode: use placeholder value
+                    return f"<{var_name}>"
                 else:
                     raise ConfigurationError(
                         f"Required environment variable not set: {var_name}",
