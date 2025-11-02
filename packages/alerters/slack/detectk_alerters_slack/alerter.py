@@ -1,0 +1,384 @@
+"""Slack alerter for DetectK.
+
+Sends alert messages to Slack channels via incoming webhooks.
+
+Philosophy: Keep it simple!
+- Alerter only handles: formatting + sending + cooldown (anti-spam)
+- Detector handles: what is anomaly, thresholds, direction, etc.
+- No complex state tracking, no consecutive checking, no direction filtering
+"""
+
+import logging
+from datetime import datetime, timedelta
+from typing import Any
+
+import requests
+
+from detectk.base import BaseAlerter
+from detectk.exceptions import AlertError, ConfigurationError
+from detectk.models import DetectionResult
+from detectk.registry import AlerterRegistry
+
+logger = logging.getLogger(__name__)
+
+
+@AlerterRegistry.register("slack")
+class SlackAlerter(BaseAlerter):
+    """Simple alerter that sends messages to Slack via webhooks.
+
+    Responsibilities:
+    1. Format detection results as readable messages
+    2. Send to Slack webhook
+    3. Prevent spam via cooldown
+
+    NOT responsible for:
+    - Deciding what is anomalous (detector's job)
+    - Filtering by direction (use appropriate detector)
+    - Consecutive anomaly checking (tune detector instead)
+    - Min deviation thresholds (tune detector n_sigma)
+
+    Configuration:
+        webhook_url: Slack incoming webhook URL (required)
+        cooldown_minutes: Minutes to wait between alerts for same metric (default: 60)
+        username: Bot username to display (default: "DetectK")
+        icon_emoji: Bot icon emoji (default: ":warning:")
+        icon_url: Bot icon URL (optional, overrides icon_emoji)
+        channel: Channel override (optional, uses webhook default)
+        timeout: Request timeout in seconds (default: 10)
+        message_template: Custom Jinja2 template for message formatting (optional)
+
+    Example configuration:
+        alerter:
+          type: "slack"
+          params:
+            webhook_url: "${SLACK_WEBHOOK}"
+            cooldown_minutes: 60  # Don't spam - wait 1 hour between alerts
+            username: "DetectK Bot"
+            icon_emoji: ":bell:"
+
+    Example with custom message template (Jinja2):
+        alerter:
+          type: "slack"
+          params:
+            webhook_url: "${SLACK_WEBHOOK}"
+            cooldown_minutes: 60
+            message_template: |
+              **ANOMALY** `{{ metric_name }}`
+              Value: {{ value | round(2) }}
+              {% if lower_bound and upper_bound %}
+              Expected: {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}
+              {% endif %}
+              Time: {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+
+    Default message format (if no custom template - simple and universal):
+        **ANOMALY DETECTED: metric_name**
+
+        Value: 1234.50
+        Expected range: 900.00 - 1100.00
+        Anomaly score: 4.20 sigma
+        Direction: up
+        Deviation: +15.0%
+
+        Time: 2024-11-02 14:30:00
+        Detector: type=mad, window=30 days, threshold=3.0 sigma
+
+    Note: Default format has NO emojis - works everywhere (email, SMS, logs, accessibility).
+          For fancy formatting with emojis, use custom templates (see examples/).
+
+    Slack-specific notes:
+    - Supports mrkdwn (Slack's Markdown flavor)
+    - Can override channel with channel parameter
+    - Bot customization via username, icon_emoji, or icon_url
+    - Webhook URL format: https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX
+    """
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        """Initialize Slack alerter.
+
+        Args:
+            config: Alerter configuration
+
+        Raises:
+            ConfigurationError: If configuration is invalid
+        """
+        self.config = config
+        self.validate_config(config)
+
+        # Required
+        self.webhook_url = config["webhook_url"]
+
+        # Optional with defaults
+        self.cooldown_minutes = config.get("cooldown_minutes", 60)
+        self.username = config.get("username", "DetectK")
+        self.icon_emoji = config.get("icon_emoji", ":warning:")
+        self.icon_url = config.get("icon_url")
+        self.channel = config.get("channel")
+        self.timeout = config.get("timeout", 10)
+
+        # Custom message template (Jinja2)
+        self.message_template = config.get("message_template")
+        self._template = None
+        if self.message_template:
+            from jinja2 import Template, TemplateSyntaxError
+
+            try:
+                self._template = Template(self.message_template)
+            except TemplateSyntaxError as e:
+                raise ConfigurationError(
+                    f"Invalid Jinja2 template in message_template: {e}",
+                    config_path="alerter.params.message_template",
+                ) from e
+
+        # Cooldown tracking (in-memory for now)
+        self._last_alert_time: dict[str, datetime] = {}
+
+    def validate_config(self, config: dict[str, Any]) -> None:
+        """Validate alerter configuration.
+
+        Args:
+            config: Configuration to validate
+
+        Raises:
+            ConfigurationError: If configuration is invalid
+        """
+        if "webhook_url" not in config:
+            raise ConfigurationError(
+                "Slack alerter requires 'webhook_url' parameter",
+                config_path="alerter.params",
+            )
+
+        webhook_url = config["webhook_url"].strip()
+        if not webhook_url:
+            raise ConfigurationError(
+                "Slack webhook_url cannot be empty",
+                config_path="alerter.params.webhook_url",
+            )
+
+        if not webhook_url.startswith("https://hooks.slack.com/"):
+            raise ConfigurationError(
+                f"Invalid Slack webhook URL: {webhook_url}. "
+                "Must start with https://hooks.slack.com/",
+                config_path="alerter.params.webhook_url",
+            )
+
+        # Validate cooldown if specified
+        cooldown = config.get("cooldown_minutes", 60)
+        if not isinstance(cooldown, (int, float)) or cooldown < 0:
+            raise ConfigurationError(
+                f"cooldown_minutes must be non-negative number, got {cooldown}",
+                config_path="alerter.params.cooldown_minutes",
+            )
+
+    def send(self, detection: DetectionResult, message: str | None = None) -> bool:
+        """Send alert to Slack if conditions are met.
+
+        Conditions checked:
+        1. Is anomaly detected? (from detector)
+        2. Is cooldown period expired?
+
+        Args:
+            detection: Detection result to alert on
+            message: Optional custom message (if None, auto-generates)
+
+        Returns:
+            True if alert was sent, False if skipped
+
+        Raises:
+            AlertError: If sending fails
+        """
+        # Check 1: Is this anomalous?
+        if not detection.is_anomaly:
+            logger.debug(f"Skipping alert for {detection.metric_name}: not anomalous")
+            return False
+
+        # Check 2: Cooldown
+        if self._in_cooldown(detection.metric_name, detection.timestamp):
+            logger.debug(
+                f"Skipping alert for {detection.metric_name}: in cooldown period"
+            )
+            return False
+
+        # Generate message if not provided
+        if message is None:
+            message = self._format_message(detection)
+
+        # Send to Slack
+        try:
+            self._send_webhook(message)
+
+            # Update cooldown tracker
+            self._last_alert_time[detection.metric_name] = detection.timestamp
+
+            logger.info(f"Alert sent for {detection.metric_name}")
+            return True
+
+        except Exception as e:
+            raise AlertError(
+                f"Failed to send Slack alert for {detection.metric_name}: {e}",
+                alerter_type="slack",
+            ) from e
+
+    def _in_cooldown(self, metric_name: str, current_time: datetime) -> bool:
+        """Check if metric is in cooldown period.
+
+        Args:
+            metric_name: Metric name
+            current_time: Current detection timestamp
+
+        Returns:
+            True if in cooldown, False otherwise
+        """
+        if self.cooldown_minutes == 0:
+            return False  # Cooldown disabled
+
+        if metric_name not in self._last_alert_time:
+            return False  # No previous alert
+
+        last_alert = self._last_alert_time[metric_name]
+        elapsed = current_time - last_alert
+        cooldown_period = timedelta(minutes=self.cooldown_minutes)
+
+        return elapsed < cooldown_period
+
+    def _format_message(self, detection: DetectionResult) -> str:
+        """Format detection result as Slack message.
+
+        Uses custom template if provided, otherwise uses default format.
+
+        Args:
+            detection: Detection result
+
+        Returns:
+            Formatted message with Slack mrkdwn
+        """
+        # If custom template provided, use it
+        if self._template:
+            try:
+                return self._template.render(
+                    metric_name=detection.metric_name,
+                    timestamp=detection.timestamp,
+                    value=detection.value,
+                    is_anomaly=detection.is_anomaly,
+                    score=detection.score,
+                    lower_bound=detection.lower_bound,
+                    upper_bound=detection.upper_bound,
+                    direction=detection.direction,
+                    percent_deviation=detection.percent_deviation,
+                    metadata=detection.metadata or {},
+                )
+            except Exception as e:
+                # If template rendering fails, log error and use default format
+                logger.error(f"Failed to render custom template: {e}. Using default format.")
+                # Fall through to default format
+
+        # Default format
+        return self._format_default_message(detection)
+
+    def _format_default_message(self, detection: DetectionResult) -> str:
+        """Format detection result using simple default format.
+
+        Philosophy: Plain, professional, no emojis. Just facts.
+        Works everywhere: Slack, Mattermost, email, logs, SMS.
+        Accessible to screen readers.
+
+        Args:
+            detection: Detection result
+
+        Returns:
+            Formatted message (plain text with minimal Markdown)
+        """
+        # Start with clear header
+        lines = [f"*ANOMALY DETECTED: {detection.metric_name}*", ""]
+
+        # Core metric data
+        lines.append(f"Value: {detection.value:.2f}")
+
+        # Expected bounds (if available)
+        if detection.lower_bound is not None and detection.upper_bound is not None:
+            lines.append(
+                f"Expected range: {detection.lower_bound:.2f} - {detection.upper_bound:.2f}"
+            )
+
+        # Anomaly score (statistical significance)
+        if detection.score is not None:
+            if detection.score == float("inf"):
+                lines.append("Anomaly score: infinite (extreme outlier)")
+            else:
+                lines.append(f"Anomaly score: {detection.score:.2f} sigma")
+
+        # Direction (if available)
+        if detection.direction:
+            lines.append(f"Direction: {detection.direction}")
+
+        # Percent deviation (if available)
+        if detection.percent_deviation is not None:
+            lines.append(f"Deviation: {detection.percent_deviation:+.1f}%")
+
+        # Timestamp
+        lines.append("")
+        lines.append(f"Time: {detection.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Detector metadata (for debugging/audit)
+        if detection.metadata:
+            detector_parts = []
+
+            if "detector" in detection.metadata:
+                detector_parts.append(f"type={detection.metadata['detector']}")
+
+            if "window_size" in detection.metadata:
+                detector_parts.append(f"window={detection.metadata['window_size']}")
+
+            if "n_sigma" in detection.metadata:
+                detector_parts.append(f"threshold={detection.metadata['n_sigma']} sigma")
+
+            if detector_parts:
+                lines.append(f"Detector: {', '.join(detector_parts)}")
+
+        return "\n".join(lines)
+
+    def _send_webhook(self, message: str) -> None:
+        """Send message to Slack webhook.
+
+        Args:
+            message: Message text (Slack mrkdwn supported)
+
+        Raises:
+            requests.RequestException: If request fails
+        """
+        payload = {
+            "text": message,
+            "username": self.username,
+        }
+
+        # Icon (emoji or URL)
+        if self.icon_url:
+            payload["icon_url"] = self.icon_url
+        else:
+            payload["icon_emoji"] = self.icon_emoji
+
+        # Channel override
+        if self.channel:
+            payload["channel"] = self.channel
+
+        response = requests.post(
+            self.webhook_url,
+            json=payload,
+            timeout=self.timeout,
+        )
+
+        response.raise_for_status()
+
+        logger.debug(f"Slack webhook response: {response.status_code}")
+
+    def clear_cooldown(self, metric_name: str | None = None) -> None:
+        """Clear cooldown tracking for a metric or all metrics.
+
+        Useful for testing or manual reset.
+
+        Args:
+            metric_name: Metric to clear (if None, clear all)
+        """
+        if metric_name is None:
+            self._last_alert_time.clear()
+        else:
+            self._last_alert_time.pop(metric_name, None)

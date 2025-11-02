@@ -1,0 +1,42 @@
+# Simple Slack Alert Example
+#
+# Basic anomaly detection with Slack notifications
+#
+# Prerequisites:
+# 1. Slack incoming webhook (https://api.slack.com/messaging/webhooks)
+# 2. Set environment variable: export SLACK_WEBHOOK="https://hooks.slack.com/services/..."
+
+name: "sessions_10min"
+description: "Monitor session count every 10 minutes"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT count() as value
+      FROM sessions
+      WHERE timestamp >= now() - INTERVAL 10 MINUTE
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 60  # Wait 1 hour between alerts
+    username: "DetectK Bot"
+    icon_emoji: ":warning:"
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"

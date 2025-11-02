@@ -1,0 +1,71 @@
+# Severity-Based Slack Alerts
+#
+# Different formatting based on anomaly severity (score)
+# Mentions @channel for critical alerts
+
+name: "api_latency"
+description: "API latency monitoring with severity-based alerts"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT avg(response_time_ms) as value
+      FROM api_requests
+      WHERE timestamp >= now() - INTERVAL 1 MINUTE
+
+detector:
+  type: "mad"
+  params:
+    window_size: "7 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 30  # Shorter cooldown for latency
+    channel: "#critical-alerts"  # Override channel
+
+    # Severity-based conditional formatting
+    message_template: |
+      {% if score and score >= 5.0 %}
+      :red_circle: *CRITICAL ANOMALY* `{{ metric_name }}` <!channel>
+      Immediate attention required!
+      {% elif score and score >= 4.0 %}
+      :large_orange_diamond: *HIGH ANOMALY* `{{ metric_name }}`
+      {% elif score and score >= 3.0 %}
+      :large_yellow_diamond: *MODERATE ANOMALY* `{{ metric_name }}`
+      {% else %}
+      :warning: *ANOMALY* `{{ metric_name }}`
+      {% endif %}
+
+      *Value:* {{ value | round(2) }}ms
+      {% if lower_bound and upper_bound %}
+      *Expected:* {{ lower_bound | round(2) }} - {{ upper_bound | round(2) }}ms
+      {% endif %}
+      {% if score %}
+      *Severity:* {{ score | round(1) }} sigma
+      {% endif %}
+
+      *Time:* {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+
+      {% if metadata.detector == 'threshold' %}
+      *Detection method:* Simple threshold check
+      {% elif metadata.detector == 'mad' %}
+      *Detection method:* Statistical (MAD), window: {{ metadata.window_size }}
+      {% elif metadata.detector == 'zscore' %}
+      *Detection method:* Statistical (Z-Score), window: {{ metadata.window_size }}
+      {% endif %}
+
+      <https://grafana.example.com/d/api|View Dashboard>
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"

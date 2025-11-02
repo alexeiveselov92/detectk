@@ -1,0 +1,64 @@
+# Rich Format Slack Alert
+#
+# Visually rich alerts with Slack emojis and formatting
+
+name: "revenue_hourly"
+description: "Monitor hourly revenue with rich formatting"
+
+collector:
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    port: 9000
+    database: "analytics"
+    query: |
+      SELECT sum(amount) as value
+      FROM transactions
+      WHERE timestamp >= now() - INTERVAL 1 HOUR
+
+detector:
+  type: "mad"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 120
+    username: "Revenue Monitor"
+    icon_emoji: ":moneybag:"
+
+    # Rich format with Slack emojis
+    message_template: |
+      :rotating_light: *ANOMALY DETECTED* `{{ metric_name }}`
+
+      :chart_with_upwards_trend: *Value:* ${{ value | round(2) }}{% if direction %} ({% if direction == 'up' %}:arrow_up:{% else %}:arrow_down:{% endif %} {{ direction }}){% endif %}
+
+      {% if lower_bound and upper_bound %}
+      :arrow_up_down: *Expected range:* ${{ lower_bound | round(2) }} - ${{ upper_bound | round(2) }}
+      {% endif %}
+      {% if score %}
+      {% if score == inf %}
+      :dart: *Score:* ∞ (extreme outlier)
+      {% else %}
+      :dart: *Score:* {{ score | round(2) }} sigma
+      {% endif %}
+      {% endif %}
+      {% if percent_deviation %}
+      :warning: *Deviation:* {{ percent_deviation | round(1) }}%
+      {% endif %}
+
+      :clock3: *Time:* {{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+
+      {% if metadata.detector %}
+      :mag: *Detector:* {{ metadata.detector }}{% if metadata.window_size %}, window: {{ metadata.window_size }}{% endif %}{% if metadata.n_sigma %}, threshold: {{ metadata.n_sigma }} sigma{% endif %}
+      {% endif %}
+
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST:-localhost}"
+    database: "detectk"
