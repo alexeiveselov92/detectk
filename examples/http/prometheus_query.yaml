@@ -1,0 +1,67 @@
+# Example: Prometheus HTTP Collector
+#
+# Use Case: Monitor Prometheus metrics via HTTP API
+# API Type: Prometheus Query API
+#
+# Requirements:
+# - pip install detectk-collectors-http
+# - Prometheus server running
+# - No authentication required (or configure as needed)
+
+name: "prometheus_up_metric"
+description: "Monitor service availability via Prometheus up metric"
+
+# Data Collection (Prometheus HTTP API)
+collector:
+  type: "http"
+  params:
+    # Prometheus query API endpoint
+    url: "http://prometheus:9090/api/v1/query"
+
+    # HTTP method
+    method: "GET"
+
+    # Query parameters
+    params:
+      query: "up{job='my-api'}"  # Prometheus PromQL query
+
+    # Response format and extraction path
+    response_format: "json"
+    # Prometheus response structure: {data: {result: [{value: [timestamp, "value"]}]}}
+    value_path: "data.result[0].value[1]"
+
+    # HTTP configuration
+    timeout: 10
+    retry_count: 3
+
+# Anomaly Detection - Threshold
+# Alert if service is down (up metric < 1)
+detector:
+  type: "threshold"
+  params:
+    operator: "less_than"
+    threshold: 1
+
+# Alerting
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 30
+
+# Storage (optional)
+storage:
+  enabled: true
+  type: "sql"
+  params:
+    connection_string: "${METRICS_DB_URL}"
+    save_detections: false
+
+# Environment Variables:
+# export SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+# export METRICS_DB_URL="postgresql://localhost/metrics"
+
+# Notes:
+# - Prometheus response format: {"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"my-api"},"value":[1699999999,"1"]}]}}
+# - value_path extracts the numeric value ("1") from nested structure
+# - up metric: 1 = service up, 0 = service down

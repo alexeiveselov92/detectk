@@ -1,0 +1,79 @@
+# Example: Grafana API Collector
+#
+# Use Case: Monitor dashboard metrics via Grafana HTTP API
+# API Type: Grafana API with authentication
+#
+# Requirements:
+# - pip install detectk-collectors-http
+# - Grafana server with API access
+# - API key or token for authentication
+
+name: "grafana_active_users"
+description: "Monitor active users metric from Grafana API"
+
+# Data Collection (Grafana HTTP API)
+collector:
+  type: "http"
+  params:
+    # Grafana API endpoint
+    url: "https://grafana.company.com/api/datasources/proxy/1/query"
+
+    # HTTP method
+    method: "POST"
+
+    # Authentication header (API key)
+    headers:
+      Authorization: "Bearer ${GRAFANA_API_KEY}"
+      Content-Type: "application/json"
+
+    # POST request body
+    json:
+      queries:
+        - refId: "A"
+          expr: "active_users"
+          range: true
+      from: "now-5m"
+      to: "now"
+
+    # Response parsing
+    response_format: "json"
+    value_path: "results.A.frames[0].data.values[0][0]"
+
+    # HTTP configuration
+    timeout: 15
+    verify_ssl: true
+    retry_count: 3
+    retry_delay: 2
+
+# Anomaly Detection - MAD with seasonality
+detector:
+  type: "mad"
+  params:
+    window_size: "7 days"
+    n_sigma: 3.0
+    use_weighted: true
+
+# Alerting
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 60
+
+# Storage
+storage:
+  enabled: true
+  type: "clickhouse"
+  params:
+    host: "${CLICKHOUSE_HOST}"
+    database: "metrics"
+
+# Environment Variables:
+# export GRAFANA_API_KEY="your_api_key_here"
+# export MATTERMOST_WEBHOOK="https://mattermost.com/hooks/YOUR_WEBHOOK"
+# export CLICKHOUSE_HOST="localhost"
+
+# Notes:
+# - Grafana API requires authentication (API key or token)
+# - Response structure varies by datasource type
+# - Adjust value_path based on your Grafana response format

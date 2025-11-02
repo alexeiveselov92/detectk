@@ -1,0 +1,81 @@
+# Example: Custom REST API Collector
+#
+# Use Case: Monitor metrics from custom REST API
+# API Type: Generic REST API with API key authentication
+#
+# Requirements:
+# - pip install detectk-collectors-http
+# - Custom API endpoint returning JSON
+
+name: "api_request_count"
+description: "Monitor API request count from custom analytics service"
+
+# Data Collection (Custom REST API)
+collector:
+  type: "http"
+  params:
+    # Custom API endpoint
+    url: "https://api.myservice.com/v1/analytics/metrics"
+
+    # HTTP method
+    method: "GET"
+
+    # Authentication via custom header
+    headers:
+      X-API-Key: "${MY_API_KEY}"
+      Accept: "application/json"
+
+    # Query parameters
+    params:
+      metric_name: "api_requests"
+      time_range: "5m"
+      aggregation: "sum"
+
+    # Response parsing
+    response_format: "json"
+    # Example response: {"status": "success", "data": {"metrics": {"value": 1234}}}
+    value_path: "data.metrics.value"
+
+    # HTTP configuration
+    timeout: 30
+    verify_ssl: true
+    retry_count: 5
+    retry_delay: 1
+
+# Anomaly Detection - Z-Score
+detector:
+  type: "zscore"
+  params:
+    window_size: "30 days"
+    n_sigma: 3.0
+    use_weighted: true
+    exp_decay_factor: 0.1
+
+# Alerting - Multiple conditions
+alerter:
+  type: "slack"
+  params:
+    webhook_url: "${SLACK_WEBHOOK}"
+    cooldown_minutes: 120
+
+# Storage
+storage:
+  enabled: true
+  type: "sql"
+  params:
+    connection_string: "${POSTGRES_URL}"
+    save_detections: true
+    datapoints_retention_days: 365
+
+# Environment Variables:
+# export MY_API_KEY="your_api_key_here"
+# export SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+# export POSTGRES_URL="postgresql://user:password@localhost:5432/analytics"
+
+# Notes:
+# - Adjust value_path to match your API response structure
+# - Common authentication methods:
+#   * X-API-Key header (shown here)
+#   * Authorization: Bearer <token>
+#   * Authorization: Basic <base64>
+# - For APIs with rate limiting, adjust retry_count and retry_delay

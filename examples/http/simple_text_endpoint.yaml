@@ -1,0 +1,65 @@
+# Example: Simple Text Endpoint Collector
+#
+# Use Case: Monitor metric from simple text-returning endpoint
+# API Type: Plain text response (single numeric value)
+#
+# Requirements:
+# - pip install detectk-collectors-http
+# - Endpoint returning plain text number
+
+name: "simple_counter"
+description: "Monitor simple counter from text endpoint"
+
+# Data Collection (Text Response)
+collector:
+  type: "http"
+  params:
+    # Endpoint that returns plain text number
+    # Example response: "42"
+    url: "http://localhost:8080/api/count"
+
+    # Simple GET request
+    method: "GET"
+
+    # Text response format (simplest option)
+    response_format: "text"
+    # No value_path needed - entire response is the value
+
+    # HTTP configuration
+    timeout: 5
+    retry_count: 2
+
+# Anomaly Detection - Threshold
+detector:
+  type: "threshold"
+  params:
+    operator: "greater_than"
+    threshold: 1000
+
+# Alerting
+alerter:
+  type: "mattermost"
+  params:
+    webhook_url: "${MATTERMOST_WEBHOOK}"
+    cooldown_minutes: 30
+
+# Storage (optional - disabled for simple monitoring)
+storage:
+  enabled: false
+
+# Environment Variables:
+# export MATTERMOST_WEBHOOK="https://mattermost.com/hooks/YOUR_WEBHOOK"
+
+# Notes:
+# - Perfect for simple health check endpoints
+# - Response must be plain numeric value (int or float)
+# - Examples of compatible endpoints:
+#   * Queue length: "123"
+#   * Active connections: "45"
+#   * Error count: "0"
+#   * CPU usage: "75.5"
+
+# Example endpoint implementation (Python Flask):
+# @app.route('/api/count')
+# def get_count():
+#     return str(get_current_count())
