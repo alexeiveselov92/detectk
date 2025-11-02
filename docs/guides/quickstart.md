@@ -18,6 +18,61 @@ pip install detectk-detectors
 pip install detectk-alerters-slack
 ```
 
+## Option 1: Initialize New Project (Recommended)
+
+The fastest way to get started is using `dtk init-project`:
+
+```bash
+# Create new project with all templates and examples
+dtk init-project my-metrics-monitoring
+
+# Navigate to project
+cd my-metrics-monitoring
+
+# Set up credentials
+cp detectk_profiles.yaml.template detectk_profiles.yaml
+cp .env.template .env
+
+# Edit with your credentials
+vim detectk_profiles.yaml
+vim .env
+
+# Load environment variables
+source .env
+
+# Validate example configuration
+dtk validate metrics/example_metric.yaml
+
+# Run your first check
+dtk run metrics/example_metric.yaml
+```
+
+This creates a complete project structure:
+- `detectk_profiles.yaml.template` - Connection profile template
+- `.env.template` - Environment variables template
+- `.gitignore` - Credentials protection (gitignored files)
+- `README.md` - Setup instructions
+- `metrics/example_metric.yaml` - Starter metric configuration
+- `examples/` - Reference examples (optional)
+
+**Interactive mode:**
+```bash
+dtk init-project --interactive
+```
+
+**Minimal setup (no examples):**
+```bash
+dtk init-project --minimal
+```
+
+See [Connection Profiles Guide](profiles.md) for more details on credential management.
+
+---
+
+## Option 2: Manual Setup
+
+If you prefer manual setup, follow these steps:
+
 ## Your First Metric Check
 
 ### Step 1: Create Configuration

@@ -13,6 +13,11 @@ import click
 from detectk import __version__
 from detectk.backtest import BacktestRunner
 from detectk.check import MetricCheck
+from detectk.cli.init_project import (
+    copy_examples,
+    create_project_structure,
+    init_git_repo,
+)
 from detectk.config.loader import ConfigLoader
 from detectk.exceptions import ConfigurationError, DetectKError
 from detectk.registry import AlerterRegistry, CollectorRegistry, DetectorRegistry
@@ -614,6 +619,203 @@ def backtest(config_path: Path, output: Path | None, verbose: bool) -> None:
             import traceback
 
             traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command("init-project")
+@click.argument("directory", type=click.Path(path_type=Path), default=".")
+@click.option(
+    "--database",
+    "-d",
+    type=click.Choice(["clickhouse", "postgres", "mysql", "sqlite"]),
+    default="clickhouse",
+    help="Primary database type",
+)
+@click.option(
+    "--minimal",
+    is_flag=True,
+    help="Create minimal structure (no examples)",
+)
+@click.option(
+    "--no-git",
+    is_flag=True,
+    help="Skip git repository initialization",
+)
+@click.option(
+    "--interactive",
+    "-i",
+    is_flag=True,
+    help="Interactive mode (ask questions)",
+)
+def init_project(
+    directory: Path,
+    database: str,
+    minimal: bool,
+    no_git: bool,
+    interactive: bool,
+) -> None:
+    """Initialize a new DetectK project with complete structure.
+
+    Creates a ready-to-use project directory with:
+    - Connection profile templates
+    - Environment variable templates
+    - .gitignore for credentials
+    - README with setup instructions
+    - Example metric configuration
+    - Optional: Reference examples from library
+
+    DIRECTORY: Project directory (default: current directory)
+
+    \b
+    Examples:
+        # Initialize in current directory
+        dtk init-project
+
+        # Create new project directory
+        dtk init-project my-metrics-monitoring
+
+        # Interactive mode
+        dtk init-project --interactive
+
+        # Minimal (no examples)
+        dtk init-project my-project --minimal
+
+        # PostgreSQL instead of ClickHouse
+        dtk init-project my-project -d postgres
+    """
+    # Interactive mode
+    if interactive:
+        click.echo()
+        click.echo("╔════════════════════════════════════════════════════════╗")
+        click.echo("║         DetectK Project Initialization                 ║")
+        click.echo("╚════════════════════════════════════════════════════════╝")
+        click.echo()
+
+        # Ask project name if directory is current
+        if directory == Path("."):
+            project_name = click.prompt(
+                "Project name",
+                default="my-detectk-project",
+                type=str,
+            )
+            directory = Path(project_name)
+
+        # Ask database type
+        database = click.prompt(
+            "Primary database",
+            type=click.Choice(["clickhouse", "postgres", "mysql", "sqlite"]),
+            default=database,
+        )
+
+        # Ask about examples
+        include_examples = click.confirm(
+            "Include example configurations?",
+            default=True,
+        )
+        minimal = not include_examples
+
+        # Ask about git
+        init_git = click.confirm("Initialize git repository?", default=True)
+        no_git = not init_git
+
+        click.echo()
+
+    # Resolve directory
+    project_dir = directory.resolve()
+
+    # Check if directory exists and is not empty
+    if project_dir.exists() and any(project_dir.iterdir()):
+        if not click.confirm(
+            f"Directory '{project_dir}' is not empty. Continue?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            sys.exit(0)
+
+    try:
+        # Create project structure
+        click.echo(f"Creating project structure in: {project_dir}")
+        click.echo()
+
+        created_files = create_project_structure(
+            project_dir,
+            include_examples=not minimal,
+            minimal=minimal,
+        )
+
+        # Report created files
+        click.echo("✓ Created project structure:")
+        click.echo(f"  • detectk_profiles.yaml.template")
+        click.echo(f"  • .env.template")
+        click.echo(f"  • .gitignore")
+        click.echo(f"  • README.md")
+        click.echo(f"  • metrics/example_metric.yaml")
+
+        # Copy examples if requested
+        if not minimal:
+            # Try to find examples in package
+            try:
+                import detectk
+
+                package_root = Path(detectk.__file__).parent.parent.parent.parent
+                examples_source = package_root / "examples"
+
+                if examples_source.exists():
+                    copied = copy_examples(project_dir, examples_source)
+                    if copied > 0:
+                        click.echo(f"✓ Copied {copied} example configuration(s)")
+                else:
+                    click.echo("⚠ Example configurations not found (install from source)")
+            except Exception as e:
+                click.echo(f"⚠ Could not copy examples: {e}")
+
+        # Initialize git repository
+        if not no_git:
+            if init_git_repo(project_dir):
+                click.echo("✓ Initialized git repository")
+            else:
+                click.echo("⚠ Could not initialize git repository (git not found?)")
+
+        # Display next steps
+        click.echo()
+        click.echo("=" * 70)
+        click.echo("NEXT STEPS")
+        click.echo("=" * 70)
+        click.echo()
+
+        # Navigation step if directory was created
+        if project_dir != Path(".").resolve():
+            click.echo(f"1. cd {project_dir.name}")
+            click.echo()
+
+        click.echo("2. Set up credentials:")
+        click.echo("   cp detectk_profiles.yaml.template detectk_profiles.yaml")
+        click.echo("   cp .env.template .env")
+        click.echo()
+
+        click.echo("3. Edit with your credentials:")
+        click.echo("   vim detectk_profiles.yaml")
+        click.echo("   vim .env")
+        click.echo()
+
+        click.echo("4. Load environment variables:")
+        click.echo("   source .env")
+        click.echo()
+
+        click.echo("5. Validate configuration:")
+        click.echo("   dtk validate metrics/example_metric.yaml")
+        click.echo()
+
+        click.echo("6. Run your first check:")
+        click.echo("   dtk run metrics/example_metric.yaml")
+        click.echo()
+
+        click.echo("📚 Documentation: https://github.com/alexeiveselov92/detectk")
+        click.echo()
+
+    except Exception as e:
+        click.echo(f"❌ Error creating project: {e}", err=True)
+        logger.exception("Project initialization failed")
         sys.exit(1)
 
 
