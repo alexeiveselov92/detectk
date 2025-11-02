@@ -220,3 +220,4 @@ detectk_profiles.yaml
 # DetectK Profiles (contain credentials)
 detectk_profiles.yaml
 .detectk/
+.venv-build/
