@@ -432,7 +432,7 @@ class MetricConfig(BaseModel):
         detectors: Multiple detector configurations (alternative to detector)
         alerter: Alert delivery configuration
         storage: Optional storage configuration
-        backtest: Optional backtesting configuration
+        schedule: Optional schedule configuration (for both production and historical loads)
         metadata: Additional arbitrary metadata
 
     Example (single detector - backward compatible):

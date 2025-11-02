@@ -23,8 +23,12 @@ class MockCollector(BaseCollector):
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
 
-    def collect(self, at_time: datetime | None = None) -> DataPoint:
-        return DataPoint(timestamp=datetime.now(), value=123.45)
+    def collect_bulk(
+        self,
+        period_start: datetime,
+        period_finish: datetime,
+    ) -> list[DataPoint]:
+        return [DataPoint(timestamp=datetime.now(), value=123.45)]
 
     def validate_config(self, config: dict[str, Any]) -> None:
         pass
@@ -36,8 +40,18 @@ class MockStorage(BaseStorage):
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
 
-    def save_datapoint(self, metric_name: str, datapoint: DataPoint) -> None:
+    def save_datapoints_bulk(
+        self,
+        metric_name: str,
+        datapoints: list[DataPoint],
+    ) -> None:
         pass
+
+    def get_last_loaded_timestamp(
+        self,
+        metric_name: str,
+    ) -> datetime | None:
+        return None
 
     def query_datapoints(
         self,

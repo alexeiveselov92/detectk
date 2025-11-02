@@ -13,7 +13,7 @@ from detectk.config import (
     DetectorConfig,
     AlerterConfig,
     StorageConfig,
-    BacktestConfig,
+    ScheduleConfig,
     ConfigLoader,
 )
 from detectk.exceptions import ConfigurationError
@@ -99,26 +99,27 @@ def test_storage_config_custom() -> None:
     assert config.retention_days == 30
 
 
-def test_backtest_config_defaults() -> None:
-    """Test backtest configuration defaults."""
-    config = BacktestConfig()
+def test_schedule_config_continuous() -> None:
+    """Test schedule configuration for continuous monitoring."""
+    config = ScheduleConfig(interval="10 minutes")
 
-    assert config.enabled is False
-    assert config.data_load_start is None
+    assert config.interval == "10 minutes"
+    assert config.start_time is None
+    assert config.end_time is None
 
 
-def test_backtest_config_enabled() -> None:
-    """Test backtest configuration when enabled."""
-    config = BacktestConfig(
-        enabled=True,
-        data_load_start="2024-01-01",
-        detection_start="2024-02-01",
-        detection_end="2024-03-01",
-        step_interval="10 minutes",
+def test_schedule_config_historical() -> None:
+    """Test schedule configuration for historical data loading."""
+    config = ScheduleConfig(
+        start_time="2024-01-01",
+        end_time="2024-03-01",
+        interval="10 minutes",
+        batch_load_days=30,
     )
 
-    assert config.enabled is True
-    assert config.data_load_start == "2024-01-01"
+    assert config.start_time == "2024-01-01"
+    assert config.end_time == "2024-03-01"
+    assert config.batch_load_days == 30
 
 
 def test_metric_config_minimal() -> None:
@@ -179,18 +180,18 @@ def test_metric_config_invalid_name() -> None:
     assert "invalid characters" in str(exc_info.value).lower()
 
 
-def test_metric_config_backtest_validation() -> None:
-    """Test backtest validation when enabled."""
-    with pytest.raises(ValueError) as exc_info:
-        MetricConfig(
-            name="test",
-            collector=CollectorConfig(type="clickhouse", params={}),
-            detector=DetectorConfig(type="mad", params={}),
-            alerter=AlerterConfig(type="mattermost", params={}),
-            backtest=BacktestConfig(enabled=True),  # Missing required fields
-        )
+def test_metric_config_with_schedule() -> None:
+    """Test metric config with schedule configuration."""
+    config = MetricConfig(
+        name="test",
+        collector=CollectorConfig(type="clickhouse", params={}),
+        detector=DetectorConfig(type="mad", params={}),
+        alerter=AlerterConfig(type="mattermost", params={}),
+        schedule=ScheduleConfig(interval="10 minutes"),
+    )
 
-    assert "data_load_start" in str(exc_info.value).lower()
+    assert config.schedule is not None
+    assert config.schedule.interval == "10 minutes"
 
 
 # ============================================================================
